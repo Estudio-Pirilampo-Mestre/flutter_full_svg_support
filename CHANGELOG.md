@@ -1,3 +1,23 @@
+## 1.3.0
+
+### Android packaging + dependency refresh
+
+This release folds in the Android `CMakeLists.txt` fix that explicitly links the
+`log` library on Android, which resolves NDK 27+ builds for the native QuickJS
+bridge.
+
+**Changed**
+
+- Added Android-specific `log` library linking in
+  `packages/quickjs_engine/native/CMakeLists.txt`.
+- Updated the package metadata to the new minor release.
+- Refreshed the public-facing README install examples to `^1.3.0`.
+
+**Fixed**
+
+- Android builds with newer NDK versions no longer fail on
+  `__android_log_print` symbol resolution in the native bridge.
+
 ## 1.2.0
 
 ### One self-contained rendering engine 🎉
