@@ -637,6 +637,9 @@ Android, iOS, macOS, Windows, Linux, and Web (file:// URIs are web-only disabled
 
 ## More documentation
 
+- [`doc/en/usage.md`](doc/en/usage.md) — Complete usage guide in English
+- [`doc/zh-Hans/usage.md`](doc/zh-Hans/usage.md) — 简体中文完整使用指南
+- [`doc/hi/usage.md`](doc/hi/usage.md) — हिन्दी में पूर्ण उपयोग गाइड
 - [`doc/migration_from_flutter_svg.md`](doc/migration_from_flutter_svg.md) — Step-by-step migration guide
 - [`doc/supported_features.md`](doc/supported_features.md) — Detailed SVG feature compatibility matrix
 - [`doc/limitations.md`](doc/limitations.md) — Known limitations and workarounds
