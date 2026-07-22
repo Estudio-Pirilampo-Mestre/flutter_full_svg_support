@@ -58,7 +58,17 @@ TODO.md
 VISUAL_TESTING_GUIDELINES.md
 W3C_SVG_11_TestSuite_PLAN_README.md
 W3C_SVG_11_TestSuite_README.md
-doc/
+doc/*
+!doc/README.md
+!doc/en/
+!doc/en/**
+!doc/zh-Hans/
+!doc/zh-Hans/**
+!doc/hi/
+!doc/hi/**
+!doc/migration_from_flutter_svg.md
+!doc/supported_features.md
+!doc/limitations.md
 
 # Compiled Swift recorder for benchmarks
 benchmarks/comparison/.bin/
