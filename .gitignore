@@ -59,10 +59,6 @@ VISUAL_TESTING_GUIDELINES.md
 W3C_SVG_11_TestSuite_PLAN_README.md
 W3C_SVG_11_TestSuite_README.md
 doc/
-example/ENHANCEMENTS_SUMMARY.md
-example/NEW_ARCHITECTURE.md
-example/SEARCH_FEATURE.md
-test_output.log
 
 # Compiled Swift recorder for benchmarks
 benchmarks/comparison/.bin/
