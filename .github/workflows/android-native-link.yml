@@ -1,0 +1,72 @@
+name: Android Native Link
+
+on:
+  pull_request:
+    paths:
+      - "lib/**"
+      - "packages/quickjs_engine/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/android-native-link.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "lib/**"
+      - "packages/quickjs_engine/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/android-native-link.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-native-link-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64_release:
+    name: Android arm64 release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.1"
+          channel: stable
+          cache: true
+
+      - name: Install Android native toolchain
+        run: |
+          yes | sdkmanager "cmake;3.22.1" "ndk;27.0.12077973"
+
+      - name: Create clean Flutter app
+        run: |
+          flutter create --platforms android "$RUNNER_TEMP/quickjs_android_smoke"
+
+      - name: Add local quickjs_engine dependency
+        working-directory: ${{ runner.temp }}/quickjs_android_smoke
+        run: |
+          if [ -f android/app/build.gradle ]; then
+            ruby -0pi -e 'sub(/ndkVersion\s*=\s*flutter\.ndkVersion/, "ndkVersion = \"27.0.12077973\"")' android/app/build.gradle
+          fi
+          if [ -f android/app/build.gradle.kts ]; then
+            ruby -0pi -e 'sub(/ndkVersion\s*=\s*flutter\.ndkVersion/, "ndkVersion = \"27.0.12077973\"")' android/app/build.gradle.kts
+          fi
+          flutter pub add quickjs_engine --path "$GITHUB_WORKSPACE/packages/quickjs_engine"
+
+      - name: Build Android release arm64
+        working-directory: ${{ runner.temp }}/quickjs_android_smoke
+        run: |
+          flutter build apk --release --target-platform android-arm64 --split-per-abi -v

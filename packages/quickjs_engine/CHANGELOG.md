@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed Android release builds by linking the native QuickJS bridge with the
+  Android `log` system library used by `__android_log_print`.
+- Aligned the Android plugin Java/Kotlin JVM target settings so clean release
+  builds complete on modern Flutter/Gradle toolchains.
+
 ## 0.1.1
 
 Documentation + tooling additions, no engine changes.

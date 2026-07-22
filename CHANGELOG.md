@@ -1,3 +1,13 @@
+## 1.3.1
+
+**Fixed**
+
+- Updated `quickjs_engine` to `^0.1.2`, which fixes Android clean CI release
+  builds failing at native CMake linking because the QuickJS bridge used
+  `__android_log_print` without linking Android `liblog`.
+- The `quickjs_engine` update also aligns Android plugin Java/Kotlin JVM
+  target settings for clean release builds on modern Flutter/Gradle toolchains.
+
 ## 1.3.0
 
 ### Android packaging + dependency refresh
