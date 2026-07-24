@@ -311,6 +311,7 @@ void _paintNodeImplWithUseContext(
           node,
           currentUseStack,
           filterPasses: filterPasses,
+          filterRegionClip: filterRegionClip,
           foreignObjectParent: groupFoParent,
           useContext: useContext,
         )) {
@@ -379,6 +380,7 @@ bool _paintGroupWithOpacity(
   SvgNode node,
   Set<String> useStack, {
   List<SvgFilterPaintPass>? filterPasses,
+  ui.Rect? filterRegionClip,
   SvgNode? foreignObjectParent,
   _UseInheritanceContext? useContext,
 }) {
@@ -416,17 +418,26 @@ bool _paintGroupWithOpacity(
   final groupBlendMode = painter._resolveMixBlendMode(node);
   final hasGroupBlendMode = groupBlendMode != null;
 
-  // Find the first filter pass with a non-trivial image or color filter.
-  SvgFilterPaintPass? filterPass;
-  if (filterPasses != null) {
-    for (final p in filterPasses) {
-      if (p.imageFilter != null || p.colorFilter != null) {
-        filterPass = p;
+  // A group filter applies to the image formed by all of its children, so
+  // every ordinary paint pass needs its own layer. Specialized passes need
+  // element-specific rendering and retain the previous group fallback.
+  final hasSpecializedFilterPass =
+      filterPasses?.any(_requiresSpecializedGroupFilterPainting) ?? false;
+  final groupFilterPasses = hasSpecializedFilterPass
+      ? null
+      : filterPasses?.where(_hasVisibleGroupFilterEffect).toList();
+  SvgFilterPaintPass? legacyFilterPass;
+  if (hasSpecializedFilterPass && filterPasses != null) {
+    for (final pass in filterPasses) {
+      if (pass.imageFilter != null || pass.colorFilter != null) {
+        legacyFilterPass = pass;
         break;
       }
     }
   }
-  final hasFilter = filterPass != null;
+  final hasFilter =
+      (groupFilterPasses != null && groupFilterPasses.isNotEmpty) ||
+      legacyFilterPass != null;
 
   // Determine if saveLayer is needed for compositing
   final needsLayer =
@@ -442,17 +453,18 @@ bool _paintGroupWithOpacity(
     return false;
   }
 
-  // Build the layer paint with opacity, blend mode, and optional filter.
+  // Build the outer layer paint. Group opacity and blend mode apply to the
+  // complete filter output, not to each individual filter pass.
   final layerPaint = ui.Paint()
     ..color = ui.Color.fromARGB((opacity * 255).round(), 255, 255, 255);
   if (hasGroupBlendMode) {
     layerPaint.blendMode = groupBlendMode;
   }
-  if (hasFilter) {
-    if (filterPass.imageFilter != null) {
-      layerPaint.imageFilter = filterPass.imageFilter;
-    } else if (filterPass.colorFilter != null) {
-      layerPaint.colorFilter = filterPass.colorFilter;
+  if (legacyFilterPass != null) {
+    if (legacyFilterPass.imageFilter != null) {
+      layerPaint.imageFilter = legacyFilterPass.imageFilter;
+    } else if (legacyFilterPass.colorFilter != null) {
+      layerPaint.colorFilter = legacyFilterPass.colorFilter;
     }
   }
 
@@ -464,30 +476,48 @@ bool _paintGroupWithOpacity(
     painter.document.filters!.pushBackgroundContext();
   }
 
-  // Paint children into the layer
-  if (painter._shouldPaintChildren(node)) {
-    // Determine if this node establishes a foreignObject context for children
-    // - foreignObject: sets new FO context for direct children
-    // - svg: resets FO context (SVG establishes new viewport)
-    // - other elements: preserve FO context from parent
-    final SvgNode? foParent;
-    if (node.tagName == 'foreignObject') {
-      foParent = node;
-    } else if (node.tagName == 'svg') {
-      foParent = null;
-    } else {
-      foParent = foreignObjectParent;
-    }
-    for (final child in node.children) {
-      _paintNodeImplWithUseContext(
+  if (groupFilterPasses != null && groupFilterPasses.isNotEmpty) {
+    for (final pass in groupFilterPasses) {
+      canvas.save();
+      if (filterRegionClip != null) {
+        canvas.clipRect(filterRegionClip);
+      }
+      if (pass.offset != ui.Offset.zero) {
+        canvas.translate(pass.offset.dx, pass.offset.dy);
+      }
+
+      final passPaint = ui.Paint();
+      if (pass.imageFilter != null) {
+        passPaint.imageFilter = pass.imageFilter;
+      }
+      if (pass.colorFilter != null) {
+        passPaint.colorFilter = pass.colorFilter;
+      }
+      if (pass.blendMode != null) {
+        passPaint.blendMode = pass.blendMode!;
+      }
+
+      canvas.saveLayer(null, passPaint);
+      _paintGroupChildren(
         painter,
         canvas,
-        child,
-        useStack: useStack,
-        foreignObjectParent: foParent,
+        node,
+        useStack,
+        foreignObjectParent: foreignObjectParent,
         useContext: useContext,
       );
+      canvas.restore();
+      canvas.restore();
     }
+  } else {
+    _paintGroupChildren(
+      painter,
+      canvas,
+      node,
+      useStack,
+      foreignObjectParent: foreignObjectParent,
+      useContext: useContext,
+    );
   }
 
   // Pop background context if it was pushed.
@@ -497,6 +527,54 @@ bool _paintGroupWithOpacity(
 
   canvas.restore();
   return true;
+}
+
+bool _hasVisibleGroupFilterEffect(SvgFilterPaintPass pass) {
+  return pass.imageFilter != null ||
+      pass.colorFilter != null ||
+      pass.blendMode != null ||
+      pass.offset != ui.Offset.zero;
+}
+
+bool _requiresSpecializedGroupFilterPainting(SvgFilterPaintPass pass) {
+  return pass is SvgDisplacementMapPaintPass ||
+      pass is SvgTurbulencePaintPass ||
+      pass is SvgFeImagePaintPass ||
+      pass is SvgDiffuseLightingPaintPass ||
+      pass is SvgSpecularLightingPaintPass ||
+      pass is SvgInnerShadowPaintPass;
+}
+
+void _paintGroupChildren(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  SvgNode node,
+  Set<String> useStack, {
+  SvgNode? foreignObjectParent,
+  _UseInheritanceContext? useContext,
+}) {
+  if (!painter._shouldPaintChildren(node)) {
+    return;
+  }
+
+  final SvgNode? foParent;
+  if (node.tagName == 'foreignObject') {
+    foParent = node;
+  } else if (node.tagName == 'svg') {
+    foParent = null;
+  } else {
+    foParent = foreignObjectParent;
+  }
+  for (final child in node.children) {
+    _paintNodeImplWithUseContext(
+      painter,
+      canvas,
+      child,
+      useStack: useStack,
+      foreignObjectParent: foParent,
+      useContext: useContext,
+    );
+  }
 }
 
 bool _paintLightingPassImpl(
