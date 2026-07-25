@@ -944,6 +944,184 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     }
   }
 
+  /// Resolves the bounds of the SourceGraphic used by a node-level filter.
+  ///
+  /// Leaf nodes use their own geometry bounds. Container nodes use the union
+  /// of their rendered descendants, expressed in the container's local
+  /// coordinate system. The node's own canvas transform is deliberately not
+  /// included: callers resolve this after applying that transform.
+  ui.Rect _resolveFilterTargetBounds(SvgNode node) {
+    if (!_isFilterBoundsContainer(node)) {
+      return _getNodeBounds(node);
+    }
+
+    ui.Rect? bounds;
+    for (final child in node.children) {
+      if (!_contributesToFilterBounds(child)) {
+        continue;
+      }
+
+      final childBounds = _resolveFilterTargetBounds(child);
+      if (childBounds.width <= 0 || childBounds.height <= 0) {
+        continue;
+      }
+
+      final mappedBounds = _mapChildBoundsToParent(child, childBounds);
+      bounds = bounds == null
+          ? mappedBounds
+          : bounds.expandToInclude(mappedBounds);
+    }
+
+    return bounds ?? ui.Rect.zero;
+  }
+
+  bool _isFilterBoundsContainer(SvgNode node) {
+    switch (node.tagName.toLowerCase()) {
+      case 'a':
+      case 'g':
+      case 'svg':
+      case 'foreignobject':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _contributesToFilterBounds(SvgNode node) {
+    final display = _getStyleOrAttributeValue(
+      node,
+      'display',
+    )?.toString().trim().toLowerCase();
+    if (display == 'none') {
+      return false;
+    }
+
+    final visibility = _getInheritedString(
+      node,
+      'visibility',
+    )?.trim().toLowerCase();
+    return visibility != 'hidden' && visibility != 'collapse';
+  }
+
+  ui.Rect _mapChildBoundsToParent(SvgNode child, ui.Rect bounds) {
+    var transform = _resolveNodePaintTransform(child);
+
+    if (child.tagName == 'foreignObject') {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
+    } else if (child.tagName == 'svg' && !identical(child, document.root)) {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
+      final viewportTransform = _computeSingleViewportTransform(child);
+      if (viewportTransform != null) {
+        transform =
+            transform *
+            Matrix4x4(Float64List.fromList(viewportTransform.storage));
+      }
+    }
+
+    return _transformRect(transform, bounds);
+  }
+
+  Matrix4x4 _resolveNodePaintTransform(SvgNode node) {
+    var matrix = Matrix4x4.identity();
+
+    final rawOffsetPath = _getStyleOrAttributeValue(
+      node,
+      'offset-path',
+    )?.toString();
+    if (rawOffsetPath != null && rawOffsetPath.trim().isNotEmpty) {
+      final motionPath = _resolveMotionPath(node, rawOffsetPath);
+      if (motionPath != null && motionPath.totalLength > 0) {
+        var progress = _resolveOffsetDistanceProgress(
+          _getStyleOrAttributeValue(node, 'offset-distance')?.toString(),
+          motionPath,
+        );
+        if (!progress.isFinite) {
+          progress = 0.0;
+        }
+        final point = motionPath.getPointAtTime(progress.clamp(0.0, 1.0));
+        matrix =
+            matrix *
+            Matrix4x4.translation(point.position.dx, point.position.dy, 0);
+        final rotation = _resolveOffsetRotateRadians(
+          _getStyleOrAttributeValue(node, 'offset-rotate')?.toString(),
+          point,
+        );
+        if (rotation.isFinite && rotation != 0.0) {
+          matrix = matrix * Matrix4x4.rotationZ(rotation);
+        }
+      }
+    }
+
+    final svgTransform = _getString(node, 'transform');
+    final cssTransform = _getStyleOrAttributeValue(
+      node,
+      'transform',
+    )?.toString();
+    final transformString = cssTransform ?? svgTransform;
+    if (transformString == null ||
+        transformString.isEmpty ||
+        transformString.toLowerCase() == 'none') {
+      return matrix;
+    }
+
+    final origin = _parseTransformOrigin(node);
+    if (origin != null && (origin.dx != 0 || origin.dy != 0)) {
+      matrix = matrix * Matrix4x4.translation(origin.dx, origin.dy, 0);
+    }
+
+    for (final transform in SvgTransform.parse(transformString)) {
+      matrix = matrix * _createMatrix4x4(transform);
+    }
+
+    if (origin != null && (origin.dx != 0 || origin.dy != 0)) {
+      matrix = matrix * Matrix4x4.translation(-origin.dx, -origin.dy, 0);
+    }
+
+    return matrix;
+  }
+
+  ui.Rect _transformRect(Matrix4x4 transform, ui.Rect rect) {
+    final topLeft = transform.transform2D(rect.left, rect.top, 0);
+    final topRight = transform.transform2D(rect.right, rect.top, 0);
+    final bottomLeft = transform.transform2D(rect.left, rect.bottom, 0);
+    final bottomRight = transform.transform2D(rect.right, rect.bottom, 0);
+
+    return ui.Rect.fromPoints(
+      ui.Offset(
+        math.min(
+          math.min(topLeft.dx, topRight.dx),
+          math.min(bottomLeft.dx, bottomRight.dx),
+        ),
+        math.min(
+          math.min(topLeft.dy, topRight.dy),
+          math.min(bottomLeft.dy, bottomRight.dy),
+        ),
+      ),
+      ui.Offset(
+        math.max(
+          math.max(topLeft.dx, topRight.dx),
+          math.max(bottomLeft.dx, bottomRight.dx),
+        ),
+        math.max(
+          math.max(topLeft.dy, topRight.dy),
+          math.max(bottomLeft.dy, bottomRight.dy),
+        ),
+      ),
+    );
+  }
+
   /// Gets the viewBox for a node if available.
   ui.Rect? _getViewBox(SvgNode node) {
     final viewBoxStr = _getString(node, 'viewBox');

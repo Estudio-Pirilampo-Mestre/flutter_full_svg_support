@@ -106,7 +106,7 @@ void _paintNodeImplWithUseContext(
   painter._applyMask(canvas, node, useStack: currentUseStack);
 
   final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._getNodeBounds(node);
+  final nodeBoundsForFilterPasses = painter._resolveFilterTargetBounds(node);
 
   // Compute filter region clip rect for output clipping.
   // Per SVG spec, filter output is clipped to the filter region.
@@ -311,6 +311,7 @@ void _paintNodeImplWithUseContext(
           node,
           currentUseStack,
           filterPasses: filterPasses,
+          targetNodeBounds: nodeBoundsForFilterPasses,
           filterRegionClip: filterRegionClip,
           foreignObjectParent: groupFoParent,
           useContext: useContext,
@@ -380,6 +381,7 @@ bool _paintGroupWithOpacity(
   SvgNode node,
   Set<String> useStack, {
   List<SvgFilterPaintPass>? filterPasses,
+  required ui.Rect targetNodeBounds,
   ui.Rect? filterRegionClip,
   SvgNode? foreignObjectParent,
   _UseInheritanceContext? useContext,
@@ -418,26 +420,10 @@ bool _paintGroupWithOpacity(
   final groupBlendMode = painter._resolveMixBlendMode(node);
   final hasGroupBlendMode = groupBlendMode != null;
 
-  // A group filter applies to the image formed by all of its children, so
-  // every ordinary paint pass needs its own layer. Specialized passes need
-  // element-specific rendering and retain the previous group fallback.
-  final hasSpecializedFilterPass =
-      filterPasses?.any(_requiresSpecializedGroupFilterPainting) ?? false;
-  final groupFilterPasses = hasSpecializedFilterPass
-      ? null
-      : filterPasses?.where(_hasVisibleGroupFilterEffect).toList();
-  SvgFilterPaintPass? legacyFilterPass;
-  if (hasSpecializedFilterPass && filterPasses != null) {
-    for (final pass in filterPasses) {
-      if (pass.imageFilter != null || pass.colorFilter != null) {
-        legacyFilterPass = pass;
-        break;
-      }
-    }
-  }
+  // Filter passes describe the complete output of the filter graph. A group
+  // must execute every pass against the composited image of its children.
   final hasFilter =
-      (groupFilterPasses != null && groupFilterPasses.isNotEmpty) ||
-      legacyFilterPass != null;
+      filterPasses != null && !_isIdentityOnlyFilterPasses(filterPasses);
 
   // Determine if saveLayer is needed for compositing
   final needsLayer =
@@ -460,14 +446,6 @@ bool _paintGroupWithOpacity(
   if (hasGroupBlendMode) {
     layerPaint.blendMode = groupBlendMode;
   }
-  if (legacyFilterPass != null) {
-    if (legacyFilterPass.imageFilter != null) {
-      layerPaint.imageFilter = legacyFilterPass.imageFilter;
-    } else if (legacyFilterPass.colorFilter != null) {
-      layerPaint.colorFilter = legacyFilterPass.colorFilter;
-    }
-  }
-
   canvas.saveLayer(null, layerPaint);
 
   // Push background context for enable-background: new.
@@ -476,28 +454,24 @@ bool _paintGroupWithOpacity(
     painter.document.filters!.pushBackgroundContext();
   }
 
-  if (groupFilterPasses != null && groupFilterPasses.isNotEmpty) {
-    for (final pass in groupFilterPasses) {
-      canvas.save();
-      if (filterRegionClip != null) {
-        canvas.clipRect(filterRegionClip);
-      }
-      if (pass.offset != ui.Offset.zero) {
-        canvas.translate(pass.offset.dx, pass.offset.dy);
-      }
+  void paintGroupFilterSource({
+    ui.ImageFilter? imageFilter,
+    ui.ColorFilter? colorFilter,
+    ui.BlendMode? blendMode,
+  }) {
+    final passPaint = ui.Paint();
+    if (imageFilter != null) {
+      passPaint.imageFilter = imageFilter;
+    }
+    if (colorFilter != null) {
+      passPaint.colorFilter = colorFilter;
+    }
+    if (blendMode != null) {
+      passPaint.blendMode = blendMode;
+    }
 
-      final passPaint = ui.Paint();
-      if (pass.imageFilter != null) {
-        passPaint.imageFilter = pass.imageFilter;
-      }
-      if (pass.colorFilter != null) {
-        passPaint.colorFilter = pass.colorFilter;
-      }
-      if (pass.blendMode != null) {
-        passPaint.blendMode = pass.blendMode!;
-      }
-
-      canvas.saveLayer(null, passPaint);
+    canvas.saveLayer(null, passPaint);
+    try {
       _paintGroupChildren(
         painter,
         canvas,
@@ -506,9 +480,22 @@ bool _paintGroupWithOpacity(
         foreignObjectParent: foreignObjectParent,
         useContext: useContext,
       );
-      canvas.restore();
+    } finally {
       canvas.restore();
     }
+  }
+
+  if (hasFilter) {
+    _executeFilterPassesImpl(
+      painter,
+      canvas,
+      filterPasses,
+      _FilterRenderTarget(
+        bounds: targetNodeBounds,
+        filterRegionClip: filterRegionClip,
+        paintSource: paintGroupFilterSource,
+      ),
+    );
   } else {
     _paintGroupChildren(
       painter,
@@ -527,22 +514,6 @@ bool _paintGroupWithOpacity(
 
   canvas.restore();
   return true;
-}
-
-bool _hasVisibleGroupFilterEffect(SvgFilterPaintPass pass) {
-  return pass.imageFilter != null ||
-      pass.colorFilter != null ||
-      pass.blendMode != null ||
-      pass.offset != ui.Offset.zero;
-}
-
-bool _requiresSpecializedGroupFilterPainting(SvgFilterPaintPass pass) {
-  return pass is SvgDisplacementMapPaintPass ||
-      pass is SvgTurbulencePaintPass ||
-      pass is SvgFeImagePaintPass ||
-      pass is SvgDiffuseLightingPaintPass ||
-      pass is SvgSpecularLightingPaintPass ||
-      pass is SvgInnerShadowPaintPass;
 }
 
 void _paintGroupChildren(
@@ -739,6 +710,20 @@ List<SvgFilterPaintPass> _resolveFilterPassesImpl(
   return passes;
 }
 
+/// Returns true when [passes] consists of a single pass that has no visual
+/// effect, i.e. it is equivalent to [SvgFilterPaintPass.identity].
+///
+/// The check requires the pass to be exactly the base [SvgFilterPaintPass]
+/// type (not a specialized subclass such as [SvgDisplacementMapPaintPass] or
+/// [SvgTurbulencePaintPass]) and to carry no `imageFilter`, no `colorFilter`,
+/// no `blendMode`, and a zero `offset`. A specialized pass is never treated
+/// as identity, even if all of those fields happen to be empty, because it
+/// renders its output through a dedicated code path.
+///
+/// Callers use this to short-circuit filter handling: group painting can skip
+/// creating a filter layer, `<use>` can paint its referenced content
+/// directly, and pass resolution can special-case a lone displacement-map
+/// primitive that resolved to an identity pass.
 bool _isIdentityOnlyFilterPasses(List<SvgFilterPaintPass> passes) {
   if (passes.length != 1) {
     return false;
@@ -1126,6 +1111,27 @@ ui.Color? _resolveFilterPaintSourceColorImpl(
   return painter._applyOpacity(color, opacity * paintOpacity);
 }
 
+typedef _FilterSourcePainter =
+    void Function({
+      ui.ImageFilter? imageFilter,
+      ui.ColorFilter? colorFilter,
+      ui.BlendMode? blendMode,
+    });
+
+class _FilterRenderTarget {
+  const _FilterRenderTarget({
+    required this.paintSource,
+    this.bounds,
+    this.filterRegionClip,
+    this.isImageNode = false,
+  });
+
+  final _FilterSourcePainter paintSource;
+  final ui.Rect? bounds;
+  final ui.Rect? filterRegionClip;
+  final bool isImageNode;
+}
+
 void _paintWithFilterPassesImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
@@ -1140,120 +1146,184 @@ void _paintWithFilterPassesImpl(
   ui.Rect? filterRegionClip,
   bool isImageNode = false,
 }) {
+  _executeFilterPassesImpl(
+    painter,
+    canvas,
+    passes,
+    _FilterRenderTarget(
+      bounds: targetNodeBounds,
+      filterRegionClip: filterRegionClip,
+      isImageNode: isImageNode,
+      paintSource:
+          ({
+            ui.ImageFilter? imageFilter,
+            ui.ColorFilter? colorFilter,
+            ui.BlendMode? blendMode,
+          }) {
+            paint(imageFilter, colorFilter, blendMode);
+          },
+    ),
+  );
+}
+
+void _executeFilterPassesImpl(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  List<SvgFilterPaintPass> passes,
+  _FilterRenderTarget target,
+) {
   final previousFillFlag = painter._currentPassPaintFill;
   final previousStrokeFlag = painter._currentPassPaintStroke;
   final previousFillOverride = painter._currentPassFillColorOverride;
   final previousStrokeOverride = painter._currentPassStrokeColorOverride;
   final previousFilterPass = painter._currentFilterPass;
-  for (final pass in passes) {
-    canvas.save();
-    if (filterRegionClip != null) {
-      canvas.clipRect(filterRegionClip);
-    }
-    painter._currentPassPaintFill = pass.paintFill;
-    painter._currentPassPaintStroke = pass.paintStroke;
-    painter._currentPassFillColorOverride = pass.fillColorOverride;
-    painter._currentPassStrokeColorOverride = pass.strokeColorOverride;
-    painter._currentFilterPass = pass;
-    if (pass.offset != ui.Offset.zero) {
-      canvas.translate(pass.offset.dx, pass.offset.dy);
-    }
-    if (pass is SvgDisplacementMapPaintPass && targetNodeBounds != null) {
-      final painted = _paintDisplacementPassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted && pass.textureHref == null && pass.mapHref == null) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgTurbulencePaintPass && targetNodeBounds != null) {
-      final painted = _paintTurbulencePassImpl(
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgFeImagePaintPass) {
-      _paintFeImagePassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-      );
-      canvas.restore();
-      continue;
-    }
-    if ((pass is SvgDiffuseLightingPaintPass ||
-            pass is SvgSpecularLightingPaintPass) &&
-        targetNodeBounds != null &&
-        !isImageNode) {
-      final painted = _paintLightingPassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgInnerShadowPaintPass) {
-      // Open an isolated layer so dstOut only erases within this element's
-      // rendering. Any downstream feColorMatrix is applied at composite time
-      // via the saveLayer paint.
-      final layerPaint = ui.Paint();
-      if (pass.colorFilter != null) layerPaint.colorFilter = pass.colorFilter;
-      if (pass.imageFilter != null) layerPaint.imageFilter = pass.imageFilter;
-      canvas.saveLayer(null, layerPaint);
-      for (final p in pass.sourceGraphicPasses) {
-        painter._currentPassPaintFill = p.paintFill;
-        painter._currentPassPaintStroke = p.paintStroke;
-        painter._currentPassFillColorOverride = p.fillColorOverride;
-        painter._currentPassStrokeColorOverride = p.strokeColorOverride;
-        painter._currentFilterPass = p;
-        paint(p.imageFilter, p.colorFilter, p.blendMode);
-      }
-      for (final p in pass.blurAlphaPasses) {
-        final hasOffset = p.offset != ui.Offset.zero;
-        if (hasOffset) {
-          canvas.save();
-          canvas.translate(p.offset.dx, p.offset.dy);
+  try {
+    for (final pass in passes) {
+      canvas.save();
+      try {
+        if (target.filterRegionClip != null) {
+          canvas.clipRect(target.filterRegionClip!);
         }
-        painter._currentPassPaintFill = p.paintFill;
-        painter._currentPassPaintStroke = p.paintStroke;
-        painter._currentPassFillColorOverride = p.fillColorOverride;
-        painter._currentPassStrokeColorOverride = p.strokeColorOverride;
-        painter._currentFilterPass = p;
-        paint(p.imageFilter, p.colorFilter, ui.BlendMode.dstOut);
-        if (hasOffset) canvas.restore();
+        _setCurrentFilterPassState(painter, pass);
+        if (pass.offset != ui.Offset.zero) {
+          canvas.translate(pass.offset.dx, pass.offset.dy);
+        }
+        if (pass is SvgDisplacementMapPaintPass && target.bounds != null) {
+          final painted = _paintDisplacementPassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted && pass.textureHref == null && pass.mapHref == null) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgTurbulencePaintPass && target.bounds != null) {
+          final painted = _paintTurbulencePassImpl(
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgFeImagePaintPass) {
+          _paintFeImagePassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds,
+          );
+          continue;
+        }
+        if ((pass is SvgDiffuseLightingPaintPass ||
+                pass is SvgSpecularLightingPaintPass) &&
+            target.bounds != null &&
+            !target.isImageNode) {
+          final painted = _paintLightingPassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgInnerShadowPaintPass) {
+          _paintInnerShadowPassImpl(painter, canvas, pass, target);
+          continue;
+        }
+        target.paintSource(
+          imageFilter: pass.imageFilter,
+          colorFilter: pass.colorFilter,
+          blendMode: pass.blendMode,
+        );
+      } finally {
+        canvas.restore();
       }
-      canvas.restore(); // composite isolated layer (colorFilter applied here)
-      canvas.restore(); // restore outer save from loop
-      continue;
     }
-    paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
+  } finally {
+    painter._currentPassPaintFill = previousFillFlag;
+    painter._currentPassPaintStroke = previousStrokeFlag;
+    painter._currentPassFillColorOverride = previousFillOverride;
+    painter._currentPassStrokeColorOverride = previousStrokeOverride;
+    painter._currentFilterPass = previousFilterPass;
+  }
+}
+
+void _setCurrentFilterPassState(
+  AnimatedSvgPainter painter,
+  SvgFilterPaintPass pass,
+) {
+  painter._currentPassPaintFill = pass.paintFill;
+  painter._currentPassPaintStroke = pass.paintStroke;
+  painter._currentPassFillColorOverride = pass.fillColorOverride;
+  painter._currentPassStrokeColorOverride = pass.strokeColorOverride;
+  painter._currentFilterPass = pass;
+}
+
+void _paintInnerShadowPassImpl(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  SvgInnerShadowPaintPass pass,
+  _FilterRenderTarget target,
+) {
+  // Open an isolated layer so dstOut only erases within this element's
+  // rendering. Any downstream feColorMatrix is applied at composite time
+  // via the saveLayer paint.
+  final layerPaint = ui.Paint();
+  if (pass.colorFilter != null) layerPaint.colorFilter = pass.colorFilter;
+  if (pass.imageFilter != null) layerPaint.imageFilter = pass.imageFilter;
+  canvas.saveLayer(null, layerPaint);
+  try {
+    for (final sourcePass in pass.sourceGraphicPasses) {
+      _setCurrentFilterPassState(painter, sourcePass);
+      target.paintSource(
+        imageFilter: sourcePass.imageFilter,
+        colorFilter: sourcePass.colorFilter,
+        blendMode: sourcePass.blendMode,
+      );
+    }
+    for (final alphaPass in pass.blurAlphaPasses) {
+      canvas.save();
+      try {
+        if (alphaPass.offset != ui.Offset.zero) {
+          canvas.translate(alphaPass.offset.dx, alphaPass.offset.dy);
+        }
+        _setCurrentFilterPassState(painter, alphaPass);
+        target.paintSource(
+          imageFilter: alphaPass.imageFilter,
+          colorFilter: alphaPass.colorFilter,
+          blendMode: ui.BlendMode.dstOut,
+        );
+      } finally {
+        canvas.restore();
+      }
+    }
+  } finally {
     canvas.restore();
   }
-  painter._currentPassPaintFill = previousFillFlag;
-  painter._currentPassPaintStroke = previousStrokeFlag;
-  painter._currentPassFillColorOverride = previousFillOverride;
-  painter._currentPassStrokeColorOverride = previousStrokeOverride;
-  painter._currentFilterPass = previousFilterPass;
 }
 
 bool _paintDisplacementPassImpl(
