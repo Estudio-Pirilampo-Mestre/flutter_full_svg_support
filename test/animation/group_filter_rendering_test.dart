@@ -74,46 +74,7 @@ void main() {
   </g>
 </svg>''';
 
-    final repaintBoundaryKey = GlobalKey();
-    await tester.pumpWidget(
-      Directionality(
-        textDirection: TextDirection.ltr,
-        child: Align(
-          alignment: Alignment.topLeft,
-          child: RepaintBoundary(
-            key: repaintBoundaryKey,
-            child: const SizedBox(
-              width: 32,
-              height: 32,
-              child: AnimatedSvgPicture.string(svg),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-
-    final pixels = await tester.runAsync<Uint8List?>(() async {
-      final boundary =
-          repaintBoundaryKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary == null) return null;
-
-      final image = await boundary.toImage(pixelRatio: 1.0);
-      final byteData = await image.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      );
-      image.dispose();
-      return byteData?.buffer.asUint8List();
-    });
-
-    expect(pixels, isNotNull);
-    const centerPixelOffset = ((16 * 32) + 16) * 4;
-    final centerPixel = pixels!.sublist(
-      centerPixelOffset,
-      centerPixelOffset + 4,
-    );
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
 
     expect(centerPixel[0], closeTo(0xE4, 2));
     expect(centerPixel[1], closeTo(0xDC, 2));
@@ -978,7 +939,11 @@ void main() {
   </g>
 </svg>''';
 
-    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
+    final unmasked = _pixelAt(
+      await _renderSvgPixels(tester, turbulenceOnlySvg),
+      16,
+      16,
+    );
     final masked = _pixelAt(await _renderSvgPixels(tester, maskedSvg), 16, 16);
 
     // The filter still runs under the mask, and the mask halves the alpha.
@@ -986,9 +951,7 @@ void main() {
     expect(masked[3], closeTo((unmasked[3] * 0.5).round(), 4));
   });
 
-  testWidgets('group filter composites with a luminance mask', (
-    tester,
-  ) async {
+  testWidgets('group filter composites with a luminance mask', (tester) async {
     const turbulenceOnlySvg = '''
 <svg width="32" height="32" viewBox="0 0 32 32"
     xmlns="http://www.w3.org/2000/svg">
@@ -1022,7 +985,11 @@ void main() {
   </g>
 </svg>''';
 
-    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
+    final unmasked = _pixelAt(
+      await _renderSvgPixels(tester, turbulenceOnlySvg),
+      16,
+      16,
+    );
     final masked = _pixelAt(await _renderSvgPixels(tester, maskedSvg), 16, 16);
 
     // #808080 has ~0.5 luminance, so the filtered output is half masked.
@@ -1060,8 +1027,16 @@ void main() {
   </g>
 </svg>''';
 
-    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
-    final withOpacity = _pixelAt(await _renderSvgPixels(tester, opacitySvg), 16, 16);
+    final unmasked = _pixelAt(
+      await _renderSvgPixels(tester, turbulenceOnlySvg),
+      16,
+      16,
+    );
+    final withOpacity = _pixelAt(
+      await _renderSvgPixels(tester, opacitySvg),
+      16,
+      16,
+    );
 
     expect(withOpacity[0], isNot(closeTo(0xE4, 2)));
     expect(withOpacity[3], closeTo((unmasked[3] * 0.5).round(), 4));

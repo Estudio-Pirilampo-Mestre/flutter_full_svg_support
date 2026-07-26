@@ -1005,10 +1005,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
           // when the renderer clips. The use x/y translation is applied
           // later by _mapChildBoundsToParent.
           if (referenced.tagName == 'symbol' || referenced.tagName == 'svg') {
-            var contentBounds = _unionChildrenFilterBounds(
-              referenced,
-              guard,
-            );
+            var contentBounds = _unionChildrenFilterBounds(referenced, guard);
             if (contentBounds.width <= 0 || contentBounds.height <= 0) {
               return ui.Rect.zero;
             }
@@ -1064,9 +1061,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
                   : contentBounds.intersect(rendererClip);
             }
             var mapped = _transformRect(
-              Matrix4x4(
-                Float64List.fromList(viewportTransform.matrix.storage),
-              ),
+              Matrix4x4(Float64List.fromList(viewportTransform.matrix.storage)),
               contentBounds,
             );
             final clipRect = viewportTransform.clipRect;
@@ -1198,10 +1193,10 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
       return ui.Rect.zero;
     }
 
-    final anchor = _getStyleOrAttributeValue(node, 'text-anchor')
-        ?.toString()
-        .trim()
-        .toLowerCase();
+    final anchor = _getStyleOrAttributeValue(
+      node,
+      'text-anchor',
+    )?.toString().trim().toLowerCase();
     final left = switch (anchor) {
       'middle' => x - width / 2,
       'end' => x - width,
