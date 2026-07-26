@@ -1668,7 +1668,19 @@ void _paintNodeContentWithinMask(
   _UseInheritanceContext? useContext,
 }) {
   final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._getNodeBounds(node);
+  final nodeBoundsForFilterPasses = painter._resolveFilterTargetBounds(node);
+
+  // Compute filter region clip rect for output clipping, mirroring the
+  // main paint path.
+  ui.Rect? filterRegionClip;
+  final filterId = painter._getFilterId(node);
+  if (filterId != null && painter.document.filters != null) {
+    final region = painter.document.filters!.getFilterRegion(filterId);
+    if (nodeBoundsForFilterPasses.width > 0 &&
+        nodeBoundsForFilterPasses.height > 0) {
+      filterRegionClip = region.computeRect(nodeBoundsForFilterPasses);
+    }
+  }
 
   // Render the node content if not hidden
   if (!isHidden) {
@@ -1821,7 +1833,31 @@ void _paintNodeContentWithinMask(
       case 'g':
       case 'svg':
       case 'foreignObject':
-        // Groups painted through children recursion below
+        // Masked groups must still run the group filter pipeline (filter
+        // first, mask applied to the filter output by the mask layer).
+        // When no compositing layer is needed this returns false and the
+        // children are painted by the recursion below.
+        final SvgNode? groupFoParent;
+        if (node.tagName == 'foreignObject') {
+          groupFoParent = node;
+        } else if (node.tagName == 'svg') {
+          groupFoParent = null;
+        } else {
+          groupFoParent = foreignObjectParent;
+        }
+        if (_paintGroupWithOpacity(
+          painter,
+          canvas,
+          node,
+          currentUseStack,
+          filterPasses: filterPasses,
+          targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
+          foreignObjectParent: groupFoParent,
+          useContext: useContext,
+        )) {
+          return;
+        }
         break;
       case 'switch':
         painter._paintSwitch(canvas, node, useStack: currentUseStack);
