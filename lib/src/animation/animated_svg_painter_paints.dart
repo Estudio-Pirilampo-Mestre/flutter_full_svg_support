@@ -28,7 +28,7 @@ extension AnimatedSvgPainterPaintsExtension on AnimatedSvgPainter {
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
   }) {
-    if (!_currentPassPaintFill) {
+    if (!_currentFilterPaintState.paintFill) {
       return null;
     }
     final fillValue = _getInheritedAttributeValue(node, 'fill');
@@ -62,7 +62,7 @@ extension AnimatedSvgPainterPaintsExtension on AnimatedSvgPainter {
       paint.color = _applyOpacity(color, effectiveOpacity);
     }
 
-    final fillColorOverride = _currentPassFillColorOverride;
+    final fillColorOverride = _currentFilterPaintState.fillColorOverride;
     if (fillColorOverride != null) {
       paint
         ..shader = null
@@ -125,7 +125,7 @@ extension AnimatedSvgPainterPaintsExtension on AnimatedSvgPainter {
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
   }) {
-    if (!_currentPassPaintStroke) {
+    if (!_currentFilterPaintState.paintStroke) {
       return null;
     }
     final strokeValue = _getInheritedAttributeValue(node, 'stroke');
@@ -182,7 +182,7 @@ extension AnimatedSvgPainterPaintsExtension on AnimatedSvgPainter {
       paint.color = _applyOpacity(strokeColor, effectiveOpacity);
     }
 
-    final strokeColorOverride = _currentPassStrokeColorOverride;
+    final strokeColorOverride = _currentFilterPaintState.strokeColorOverride;
     if (strokeColorOverride != null) {
       paint
         ..shader = null

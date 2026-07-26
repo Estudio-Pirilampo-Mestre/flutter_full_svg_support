@@ -176,7 +176,7 @@ extension AnimatedSvgPainterShapesImageExtension on AnimatedSvgPainter {
             ? rawWidth * image.height / image.width
             : image.height.toDouble());
 
-    final activePass = _currentFilterPass;
+    final activePass = _currentFilterPaintState.filterPass;
     if (filterId != null) {
       final targetWidth = width.round();
       final targetHeight = height.round();

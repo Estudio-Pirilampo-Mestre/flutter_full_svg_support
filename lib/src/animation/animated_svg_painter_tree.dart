@@ -1160,6 +1160,44 @@ class _FilterRenderTarget {
   final bool isImageNode;
 }
 
+/// Ambient paint state for one active filter pass.
+///
+/// A filter executor replaces the current pass metadata while preserving any
+/// channel restriction imposed by an ancestor. The immutable value plus each
+/// executor's `try`/`finally` restoration forms a dynamic state stack.
+class _FilterPaintState {
+  const _FilterPaintState({
+    required this.paintFill,
+    required this.paintStroke,
+    this.fillColorOverride,
+    this.strokeColorOverride,
+    this.filterPass,
+  });
+
+  const _FilterPaintState.initial()
+    : paintFill = true,
+      paintStroke = true,
+      fillColorOverride = null,
+      strokeColorOverride = null,
+      filterPass = null;
+
+  final bool paintFill;
+  final bool paintStroke;
+  final ui.Color? fillColorOverride;
+  final ui.Color? strokeColorOverride;
+  final SvgFilterPaintPass? filterPass;
+
+  _FilterPaintState forPass(SvgFilterPaintPass pass) {
+    return _FilterPaintState(
+      paintFill: paintFill && pass.paintFill,
+      paintStroke: paintStroke && pass.paintStroke,
+      fillColorOverride: pass.fillColorOverride,
+      strokeColorOverride: pass.strokeColorOverride,
+      filterPass: pass,
+    );
+  }
+}
+
 void _paintWithFilterPassesImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
@@ -1175,10 +1213,9 @@ void _paintWithFilterPassesImpl(
   bool isImageNode = false,
 }) {
   // An unfiltered node resolves to a single fully-default identity pass.
-  // Paint it directly without entering the executor: the executor would
-  // overwrite the ambient paint-channel flags (_currentPassPaintFill /
-  // _currentPassPaintStroke), which must survive descendant rendering when
-  // an ancestor group pass restricts them (FillPaint/StrokePaint inputs).
+  // Paint it directly without entering the executor so descendant rendering
+  // retains the ambient channel restrictions imposed by an ancestor group
+  // pass (for example, FillPaint or StrokePaint).
   if (_isIdentityOnlyFilterPasses(passes)) {
     paint(null, null, null);
     return;
@@ -1209,11 +1246,7 @@ void _executeFilterPassesImpl(
   List<SvgFilterPaintPass> passes,
   _FilterRenderTarget target,
 ) {
-  final previousFillFlag = painter._currentPassPaintFill;
-  final previousStrokeFlag = painter._currentPassPaintStroke;
-  final previousFillOverride = painter._currentPassFillColorOverride;
-  final previousStrokeOverride = painter._currentPassStrokeColorOverride;
-  final previousFilterPass = painter._currentFilterPass;
+  final inheritedState = painter._currentFilterPaintState;
   try {
     for (final pass in passes) {
       canvas.save();
@@ -1221,7 +1254,7 @@ void _executeFilterPassesImpl(
         if (target.filterRegionClip != null) {
           canvas.clipRect(target.filterRegionClip!);
         }
-        _setCurrentFilterPassState(painter, pass);
+        painter._currentFilterPaintState = inheritedState.forPass(pass);
         if (pass.offset != ui.Offset.zero) {
           canvas.translate(pass.offset.dx, pass.offset.dy);
         }
@@ -1301,23 +1334,8 @@ void _executeFilterPassesImpl(
       }
     }
   } finally {
-    painter._currentPassPaintFill = previousFillFlag;
-    painter._currentPassPaintStroke = previousStrokeFlag;
-    painter._currentPassFillColorOverride = previousFillOverride;
-    painter._currentPassStrokeColorOverride = previousStrokeOverride;
-    painter._currentFilterPass = previousFilterPass;
+    painter._currentFilterPaintState = inheritedState;
   }
-}
-
-void _setCurrentFilterPassState(
-  AnimatedSvgPainter painter,
-  SvgFilterPaintPass pass,
-) {
-  painter._currentPassPaintFill = pass.paintFill;
-  painter._currentPassPaintStroke = pass.paintStroke;
-  painter._currentPassFillColorOverride = pass.fillColorOverride;
-  painter._currentPassStrokeColorOverride = pass.strokeColorOverride;
-  painter._currentFilterPass = pass;
 }
 
 void _paintInnerShadowPassImpl(
@@ -1326,6 +1344,8 @@ void _paintInnerShadowPassImpl(
   SvgInnerShadowPaintPass pass,
   _FilterRenderTarget target,
 ) {
+  final inheritedState = painter._currentFilterPaintState;
+
   // Open an isolated layer so dstOut only erases within this element's
   // rendering. Any downstream feColorMatrix is applied at composite time
   // via the saveLayer paint.
@@ -1335,7 +1355,7 @@ void _paintInnerShadowPassImpl(
   canvas.saveLayer(null, layerPaint);
   try {
     for (final sourcePass in pass.sourceGraphicPasses) {
-      _setCurrentFilterPassState(painter, sourcePass);
+      painter._currentFilterPaintState = inheritedState.forPass(sourcePass);
       target.paintSource(
         imageFilter: sourcePass.imageFilter,
         colorFilter: sourcePass.colorFilter,
@@ -1348,7 +1368,7 @@ void _paintInnerShadowPassImpl(
         if (alphaPass.offset != ui.Offset.zero) {
           canvas.translate(alphaPass.offset.dx, alphaPass.offset.dy);
         }
-        _setCurrentFilterPassState(painter, alphaPass);
+        painter._currentFilterPaintState = inheritedState.forPass(alphaPass);
         target.paintSource(
           imageFilter: alphaPass.imageFilter,
           colorFilter: alphaPass.colorFilter,
@@ -1359,6 +1379,7 @@ void _paintInnerShadowPassImpl(
       }
     }
   } finally {
+    painter._currentFilterPaintState = inheritedState;
     canvas.restore();
   }
 }
