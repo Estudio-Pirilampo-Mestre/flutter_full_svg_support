@@ -1018,8 +1018,38 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
             );
             if (viewportTransform == null) {
               // No viewBox (or no explicit viewport size): the content is
-              // rendered unscaled in the use coordinate system.
-              return contentBounds;
+              // rendered unscaled in the use coordinate system, but the
+              // renderer still clips it (unless overflow:visible) — to the
+              // use width/height, or to the viewBox when those are absent
+              // (_applySymbolOverflowClipping). Mirror that clip.
+              final overflow = _getInheritedString(
+                referenced,
+                'overflow',
+              )?.toLowerCase();
+              if (overflow == 'visible') {
+                return contentBounds;
+              }
+              final useWidth = _getNumber(node, 'width');
+              final useHeight = _getNumber(node, 'height');
+              ui.Rect? rendererClip;
+              if (useWidth != null &&
+                  useHeight != null &&
+                  useWidth > 0 &&
+                  useHeight > 0) {
+                rendererClip = ui.Rect.fromLTWH(0, 0, useWidth, useHeight);
+              } else {
+                final viewBox = _parseViewBox(
+                  _getString(referenced, 'viewBox'),
+                );
+                if (viewBox != null &&
+                    viewBox.width > 0 &&
+                    viewBox.height > 0) {
+                  rendererClip = viewBox;
+                }
+              }
+              return rendererClip == null
+                  ? contentBounds
+                  : contentBounds.intersect(rendererClip);
             }
             var mapped = _transformRect(
               Matrix4x4(

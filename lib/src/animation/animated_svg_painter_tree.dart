@@ -108,8 +108,10 @@ void _paintNodeImplWithUseContext(
   final filterPasses = _resolveFilterPassesImpl(painter, node);
   final filterId = painter._getFilterId(node);
   // Filter target bounds are only consumed by the filter executor. Skip
-  // the (potentially expensive) resolution for unfiltered nodes.
-  final nodeBoundsForFilterPasses = filterId != null
+  // the (potentially expensive) resolution for unfiltered nodes and for
+  // filters that resolve to a no-op identity pass.
+  final nodeBoundsForFilterPasses =
+      filterId != null && !_isIdentityOnlyFilterPasses(filterPasses)
       ? painter._resolveFilterTargetBounds(node)
       : ui.Rect.zero;
 
@@ -463,18 +465,24 @@ bool _paintGroupWithOpacity(
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
   }) {
-    final passPaint = ui.Paint();
-    if (imageFilter != null) {
-      passPaint.imageFilter = imageFilter;
+    // A pass without paint effects composites the children unchanged;
+    // skip the layer in that case, mirroring the <use> source painter.
+    final hasPaintEffects =
+        imageFilter != null || colorFilter != null || blendMode != null;
+    ui.Paint? passPaint;
+    if (hasPaintEffects) {
+      passPaint = ui.Paint();
+      if (imageFilter != null) {
+        passPaint.imageFilter = imageFilter;
+      }
+      if (colorFilter != null) {
+        passPaint.colorFilter = colorFilter;
+      }
+      if (blendMode != null) {
+        passPaint.blendMode = blendMode;
+      }
+      canvas.saveLayer(null, passPaint);
     }
-    if (colorFilter != null) {
-      passPaint.colorFilter = colorFilter;
-    }
-    if (blendMode != null) {
-      passPaint.blendMode = blendMode;
-    }
-
-    canvas.saveLayer(null, passPaint);
     try {
       _paintGroupChildren(
         painter,
@@ -485,7 +493,9 @@ bool _paintGroupWithOpacity(
         useContext: useContext,
       );
     } finally {
-      canvas.restore();
+      if (hasPaintEffects) {
+        canvas.restore();
+      }
     }
   }
 
@@ -1673,8 +1683,10 @@ void _paintNodeContentWithinMask(
 }) {
   final filterPasses = _resolveFilterPassesImpl(painter, node);
   final filterId = painter._getFilterId(node);
-  // Skip bounds resolution for unfiltered nodes, mirroring the main path.
-  final nodeBoundsForFilterPasses = filterId != null
+  // Skip bounds resolution for unfiltered nodes and identity filters,
+  // mirroring the main path.
+  final nodeBoundsForFilterPasses =
+      filterId != null && !_isIdentityOnlyFilterPasses(filterPasses)
       ? painter._resolveFilterTargetBounds(node)
       : ui.Rect.zero;
 
@@ -1705,6 +1717,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
           isImageNode: true,
         );
         break;
@@ -1721,6 +1734,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'ellipse':
@@ -1736,6 +1750,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'path':
@@ -1751,6 +1766,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'polygon':
@@ -1766,6 +1782,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'polyline':
@@ -1781,6 +1798,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'line':
@@ -1796,6 +1814,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'image':
@@ -1811,6 +1830,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'text':
@@ -1826,6 +1846,7 @@ void _paintNodeContentWithinMask(
             blendMode: blendMode,
           ),
           targetNodeBounds: nodeBoundsForFilterPasses,
+          filterRegionClip: filterRegionClip,
         );
         break;
       case 'use':

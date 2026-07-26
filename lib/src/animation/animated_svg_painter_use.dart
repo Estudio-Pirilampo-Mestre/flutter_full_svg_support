@@ -181,8 +181,9 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
     final filterPasses = _resolveFilterPassesImpl(this, node);
     final filterId = _getFilterId(node);
     // Align with the main paint path: resolve real use geometry and skip
-    // the work for unfiltered uses.
-    final nodeBoundsForFilterPasses = filterId != null
+    // the work for unfiltered uses and identity filters.
+    final nodeBoundsForFilterPasses =
+        filterId != null && !_isIdentityOnlyFilterPasses(filterPasses)
         ? _resolveFilterTargetBounds(node)
         : ui.Rect.zero;
 
