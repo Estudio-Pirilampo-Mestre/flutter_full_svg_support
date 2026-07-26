@@ -106,12 +106,16 @@ void _paintNodeImplWithUseContext(
   painter._applyMask(canvas, node, useStack: currentUseStack);
 
   final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._resolveFilterTargetBounds(node);
+  final filterId = painter._getFilterId(node);
+  // Filter target bounds are only consumed by the filter executor. Skip
+  // the (potentially expensive) resolution for unfiltered nodes.
+  final nodeBoundsForFilterPasses = filterId != null
+      ? painter._resolveFilterTargetBounds(node)
+      : ui.Rect.zero;
 
   // Compute filter region clip rect for output clipping.
   // Per SVG spec, filter output is clipped to the filter region.
   ui.Rect? filterRegionClip;
-  final filterId = painter._getFilterId(node);
   if (filterId != null && painter.document.filters != null) {
     final region = painter.document.filters!.getFilterRegion(filterId);
     if (nodeBoundsForFilterPasses.width > 0 &&
@@ -1668,12 +1672,15 @@ void _paintNodeContentWithinMask(
   _UseInheritanceContext? useContext,
 }) {
   final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._resolveFilterTargetBounds(node);
+  final filterId = painter._getFilterId(node);
+  // Skip bounds resolution for unfiltered nodes, mirroring the main path.
+  final nodeBoundsForFilterPasses = filterId != null
+      ? painter._resolveFilterTargetBounds(node)
+      : ui.Rect.zero;
 
   // Compute filter region clip rect for output clipping, mirroring the
   // main paint path.
   ui.Rect? filterRegionClip;
-  final filterId = painter._getFilterId(node);
   if (filterId != null && painter.document.filters != null) {
     final region = painter.document.filters!.getFilterRegion(filterId);
     if (nodeBoundsForFilterPasses.width > 0 &&
