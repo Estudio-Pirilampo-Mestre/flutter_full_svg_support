@@ -994,7 +994,28 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
             !_isUseReferenceAllowedTag(referenced.tagName)) {
           return ui.Rect.zero;
         }
+        // Per SVG 1.1 §5.6, use→symbol establishes a viewport sized by the
+        // use element's width/height. The use x/y translation is applied
+        // later by _mapChildBoundsToParent.
+        if (referenced.tagName == 'symbol') {
+          final width = _getNumber(node, 'width');
+          final height = _getNumber(node, 'height');
+          if (width != null && height != null && width > 0 && height > 0) {
+            return ui.Rect.fromLTWH(0, 0, width, height);
+          }
+          return _getViewBox(referenced) ?? ui.Rect.zero;
+        }
         return _resolveFilterTargetBounds(referenced, guard);
+      case 'switch':
+        // Mirror the render path: only the conditionally selected child
+        // contributes geometry.
+        final activeChild = resolveActiveSwitchChild(node);
+        if (activeChild == null) {
+          return ui.Rect.zero;
+        }
+        return _resolveFilterTargetBounds(activeChild, useGuard);
+      case 'text':
+        return _resolveTextFilterBounds(node);
     }
     if (!_isFilterBoundsContainer(node)) {
       return _getNodeBounds(node);
@@ -1018,6 +1039,51 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     }
 
     return bounds ?? ui.Rect.zero;
+  }
+
+  /// Approximate geometric bounds of a text node for filter target bounds.
+  ///
+  /// Full text bounds require the layout pipeline (x/y lists, tspan offsets,
+  /// textLength, textPath). This approximation measures the concatenated
+  /// text content as a single paragraph at the first x/y position, which is
+  /// sufficient for sizing filter output regions. It intentionally ignores
+  /// tspan-relative offsets, textPath, and per-glyph rotation.
+  ui.Rect _resolveTextFilterBounds(SvgNode node) {
+    final content = _collectTextContent(node).trim();
+    if (content.isEmpty) {
+      return ui.Rect.zero;
+    }
+    final fontSize = _getInheritedNumber(node, 'font-size') ?? 16.0;
+    if (fontSize <= 0) {
+      return ui.Rect.zero;
+    }
+    final x = _getNumber(node, 'x') ?? 0.0;
+    final y = _getNumber(node, 'y') ?? 0.0;
+    final fontFamily = _getInheritedString(node, 'font-family');
+
+    final builder = ui.ParagraphBuilder(
+      ui.ParagraphStyle(fontSize: fontSize, fontFamily: fontFamily),
+    )..addText(content);
+    final paragraph = builder.build()
+      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final width = paragraph.maxIntrinsicWidth;
+    final top = y - paragraph.alphabeticBaseline;
+    final height = paragraph.height;
+    paragraph.dispose();
+    if (width <= 0 || height <= 0) {
+      return ui.Rect.zero;
+    }
+
+    final anchor = _getStyleOrAttributeValue(node, 'text-anchor')
+        ?.toString()
+        .trim()
+        .toLowerCase();
+    final left = switch (anchor) {
+      'middle' => x - width / 2,
+      'end' => x - width,
+      _ => x,
+    };
+    return ui.Rect.fromLTWH(left, top, width, height);
   }
 
   bool _isFilterBoundsContainer(SvgNode node) {

@@ -563,4 +563,105 @@ void main() {
     expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
     expect(centerPixel[3], greaterThan(0));
   });
+
+  testWidgets('objectBoundingBox group filter resolves switch child geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <switch>
+      <path d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+    </switch>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter handles empty switch', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <switch>
+      <path systemLanguage="xx-nonexistent" d="M0 0 H32 V32 H0 Z"
+          fill="#E4DCEA"/>
+    </switch>
+  </g>
+</svg>''';
+
+    // No child is selected, so nothing renders; the bounds resolution must
+    // not throw and must yield an empty output.
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[3], 0);
+  });
+
+  testWidgets('objectBoundingBox group filter resolves text geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <text x="2" y="26" font-size="24" fill="#E4DCEA">Hi</text>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves use-symbol geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="sym" viewBox="0 0 32 32">
+      <rect width="32" height="32" fill="#E4DCEA"/>
+    </symbol>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#sym" width="32" height="32"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
 }
