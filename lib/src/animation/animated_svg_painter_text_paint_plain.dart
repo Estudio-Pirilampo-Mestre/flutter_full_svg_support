@@ -31,6 +31,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
         imageFilter: imageFilter,
         colorFilter: colorFilter,
         blendMode: blendMode,
+        boundsRecorder: boundsRecorder,
       );
     }
 
@@ -304,6 +305,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final glyphs = text.runes.map((r) => String.fromCharCode(r)).toList();
     if (glyphs.isEmpty) return 0.0;
@@ -324,6 +326,23 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
       final isUpright = _isGlyphUprightInVertical(
         glyph,
         style.glyphOrientationVertical,
+      );
+      // Match the same translate/rotate operations used below so filter
+      // target bounds cover the vertical glyph as it is actually painted.
+      boundsRecorder?.call(
+        isUpright
+            ? ui.Rect.fromLTWH(
+                x - glyphWidth / 2,
+                cursorY,
+                glyphWidth,
+                paragraph.height,
+              )
+            : ui.Rect.fromLTWH(
+                x + glyphWidth / 2 - paragraph.height,
+                cursorY,
+                paragraph.height,
+                glyphWidth,
+              ),
       );
       canvas.save();
       canvas.translate(x, cursorY);

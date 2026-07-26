@@ -188,15 +188,33 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
         drawY = transformedPos.dy;
       }
 
-      // Report the unrotated glyph box for filter target bounds resolution.
-      boundsRecorder?.call(
-        ui.Rect.fromLTWH(
-          drawX,
-          drawY,
-          glyphWidth * scaleFactor,
-          paragraph.height,
-        ),
+      final unscaledDrawX = drawX;
+      final glyphBounds = ui.Rect.fromLTWH(
+        hasScaleFactor ? 0.0 : unscaledDrawX,
+        drawY,
+        glyphWidth,
+        paragraph.height,
       );
+      var glyphBoundsTransform = Matrix4x4.identity();
+      if (hasScaleFactor) {
+        glyphBoundsTransform =
+            glyphBoundsTransform *
+            Matrix4x4.translation(unscaledDrawX, 0.0, 0.0) *
+            Matrix4x4.scale(scaleFactor, 1.0, 1.0);
+      }
+      if (rotation != 0.0) {
+        final pivotX = hasScaleFactor ? 0.0 : unscaledDrawX;
+        final radians = rotation * 3.1415926535897932 / 180.0;
+        glyphBoundsTransform =
+            glyphBoundsTransform *
+            Matrix4x4.translation(pivotX, cursor.y, 0.0) *
+            Matrix4x4.rotationZ(radians) *
+            Matrix4x4.translation(-pivotX, -cursor.y, 0.0);
+      }
+
+      // Mirror the scale and rotate operations used below so filter target
+      // bounds cover the glyph after every per-character transform.
+      boundsRecorder?.call(_transformRect(glyphBoundsTransform, glyphBounds));
 
       final strokeParagraph = _buildStrokeTextParagraph(glyph, style, node);
       final needsCanvasSave = rotation != 0.0 || hasScaleFactor;

@@ -1129,9 +1129,9 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   /// Runs the real text paint pipeline on a throwaway recorder canvas and
   /// unions the exact chunk and glyph boxes the renderer computes, so
   /// tspan x/y/dx/dy positioning, text anchors, textLength, and bidi are
-  /// honored without duplicating text layout semantics. Per-glyph rotate
-  /// contributes unrotated glyph boxes. Subtrees containing textPath fall
-  /// back to [_approximateTextFilterBounds].
+  /// honored without duplicating text layout semantics. Per-glyph scale and
+  /// rotate contribute transformed glyph boxes. Text-path subtrees use
+  /// [_approximateTextFilterBounds].
   ui.Rect _resolveTextFilterBounds(SvgNode node) {
     if (_hasTextPathDescendant(node)) {
       return _approximateTextFilterBounds(node);
