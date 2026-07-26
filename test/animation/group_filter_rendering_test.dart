@@ -874,6 +874,40 @@ void main() {
     expect(outsidePixel[3], 0);
   });
 
+  testWidgets('objectBoundingBox group filter maps use-svg root transform', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <svg id="shiftedInner" transform="translate(37.5 37.5)"
+        viewBox="0 0 100 100">
+      <rect width="50" height="50" fill="#E4DCEA"/>
+    </svg>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#shiftedInner" width="32" height="32"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The referenced svg carries translate(37.5) in viewBox units, so its
+    // content lands at [12, 28] in the 32x32 viewport instead of [0, 16].
+    // A bounds path that ignores the referenced root transform would put
+    // the filter region at the origin.
+    final shiftedPixel = _pixelAt(pixels, 20, 20);
+    expect(shiftedPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(shiftedPixel[3], greaterThan(0));
+    final originPixel = _pixelAt(pixels, 4, 4);
+    expect(originPixel[3], 0);
+  });
+
   testWidgets('group filter composites with a partial-alpha mask', (
     tester,
   ) async {
