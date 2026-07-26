@@ -715,10 +715,14 @@ List<SvgFilterPaintPass> _resolveFilterPassesImpl(
 ///
 /// The check requires the pass to be exactly the base [SvgFilterPaintPass]
 /// type (not a specialized subclass such as [SvgDisplacementMapPaintPass] or
-/// [SvgTurbulencePaintPass]) and to carry no `imageFilter`, no `colorFilter`,
-/// no `blendMode`, and a zero `offset`. A specialized pass is never treated
-/// as identity, even if all of those fields happen to be empty, because it
-/// renders its output through a dedicated code path.
+/// [SvgTurbulencePaintPass]) and to be fully default: no `imageFilter`, no
+/// `colorFilter`, no `blendMode`, a zero `offset`, both paint channels
+/// enabled, and no color overrides. A specialized pass is never treated as
+/// identity, even if all of those fields happen to be empty, because it
+/// renders its output through a dedicated code path. Channel-restricted
+/// passes produced for FillPaint/StrokePaint inputs (paintFill/paintStroke
+/// selectively disabled) are not identity either: they suppress one paint
+/// channel and must go through the pass executor.
 ///
 /// Callers use this to short-circuit filter handling: group painting can skip
 /// creating a filter layer, `<use>` can paint its referenced content
@@ -733,7 +737,11 @@ bool _isIdentityOnlyFilterPasses(List<SvgFilterPaintPass> passes) {
       pass.imageFilter == null &&
       pass.colorFilter == null &&
       pass.blendMode == null &&
-      pass.offset == ui.Offset.zero;
+      pass.offset == ui.Offset.zero &&
+      pass.paintFill &&
+      pass.paintStroke &&
+      pass.fillColorOverride == null &&
+      pass.strokeColorOverride == null;
 }
 
 /// Syncs animated attribute values from source SvgNodes to SvgFilter objects.
@@ -1146,6 +1154,15 @@ void _paintWithFilterPassesImpl(
   ui.Rect? filterRegionClip,
   bool isImageNode = false,
 }) {
+  // An unfiltered node resolves to a single fully-default identity pass.
+  // Paint it directly without entering the executor: the executor would
+  // overwrite the ambient paint-channel flags (_currentPassPaintFill /
+  // _currentPassPaintStroke), which must survive descendant rendering when
+  // an ancestor group pass restricts them (FillPaint/StrokePaint inputs).
+  if (_isIdentityOnlyFilterPasses(passes)) {
+    paint(null, null, null);
+    return;
+  }
   _executeFilterPassesImpl(
     painter,
     canvas,
