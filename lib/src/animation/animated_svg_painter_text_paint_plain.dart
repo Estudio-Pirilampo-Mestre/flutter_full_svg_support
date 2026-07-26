@@ -15,6 +15,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final isVertical = style.writingMode != _SvgWritingMode.horizontalTb;
     if (isVertical) {
@@ -151,6 +152,10 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
       paragraph.maxIntrinsicWidth,
       paragraph.height,
     );
+
+    // Report the exact bounds this chunk will occupy. Used by filter target
+    // bounds resolution running the pipeline in recording mode.
+    boundsRecorder?.call(paragraphBoundsAt(drawX));
 
     ui.Rect strokeParagraphBoundsAt(double x) => ui.Rect.fromLTWH(
       x,

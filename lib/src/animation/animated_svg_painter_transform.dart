@@ -1068,14 +1068,50 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     return bounds ?? ui.Rect.zero;
   }
 
+  /// Geometric bounds of a text node for filter target bounds.
+  ///
+  /// Runs the real text paint pipeline on a throwaway recorder canvas and
+  /// unions the exact chunk and glyph boxes the renderer computes, so
+  /// tspan x/y/dx/dy positioning, text anchors, textLength, and bidi are
+  /// honored without duplicating text layout semantics. Per-glyph rotate
+  /// contributes unrotated glyph boxes. Subtrees containing textPath fall
+  /// back to [_approximateTextFilterBounds].
+  ui.Rect _resolveTextFilterBounds(SvgNode node) {
+    if (_hasTextPathDescendant(node)) {
+      return _approximateTextFilterBounds(node);
+    }
+    final pictureRecorder = ui.PictureRecorder();
+    ui.Rect? bounds;
+    try {
+      final recordingCanvas = ui.Canvas(pictureRecorder);
+      _paintText(
+        recordingCanvas,
+        node,
+        boundsRecorder: (rect) {
+          bounds = bounds == null ? rect : bounds!.expandToInclude(rect);
+        },
+      );
+    } finally {
+      pictureRecorder.endRecording().dispose();
+    }
+    return bounds ?? ui.Rect.zero;
+  }
+
+  bool _hasTextPathDescendant(SvgNode node) {
+    for (final child in node.children) {
+      if (child.tagName == 'textPath' || _hasTextPathDescendant(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Approximate geometric bounds of a text node for filter target bounds.
   ///
-  /// Full text bounds require the layout pipeline (x/y lists, tspan offsets,
-  /// textLength, textPath). This approximation measures the concatenated
-  /// text content as a single paragraph at the first x/y position, which is
-  /// sufficient for sizing filter output regions. It intentionally ignores
-  /// tspan-relative offsets, textPath, and per-glyph rotation.
-  ui.Rect _resolveTextFilterBounds(SvgNode node) {
+  /// Used as the textPath fallback. Measures the concatenated text content
+  /// as a single paragraph at the first x/y position. It intentionally
+  /// ignores tspan-relative offsets and per-glyph positioning.
+  ui.Rect _approximateTextFilterBounds(SvgNode node) {
     final content = _collectTextContent(node).trim();
     if (content.isEmpty) {
       return ui.Rect.zero;

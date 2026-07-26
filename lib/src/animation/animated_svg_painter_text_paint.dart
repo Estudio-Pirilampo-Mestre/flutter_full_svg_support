@@ -8,6 +8,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final startX = _getNumber(node, 'x') ?? 0.0;
     final startY = _getNumber(node, 'y') ?? 0.0;
@@ -21,6 +22,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
       colorFilter: colorFilter,
       blendMode: blendMode,
       isRootText: true,
+      boundsRecorder: boundsRecorder,
     );
   }
 
@@ -40,6 +42,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
     bool isRootText = false,
     _ResolvedTextStyle? parentStyle,
     _TextLengthDistribution? inheritedDistribution,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final nodeXList = _getNumberList(node, 'x');
     final nodeYList = _getNumberList(node, 'y');
@@ -132,6 +135,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
         blendMode: blendMode,
         parentStyle: parentStyle,
         textLengthDistribution: effectiveDistribution,
+        boundsRecorder: boundsRecorder,
       );
       cursor.x += consumed;
     }
@@ -161,6 +165,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
           parentRotateStartIndex: rotateListStartIndex,
           parentStyle: effectiveStyle,
           inheritedDistribution: effectiveDistribution,
+          boundsRecorder: boundsRecorder,
         );
       } else if (child.tagName == 'tref') {
         final consumed = _paintTrefNode(
@@ -177,6 +182,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
           parentRotateList: rotateList,
           parentRotateStartIndex: rotateListStartIndex,
           parentStyle: style,
+          boundsRecorder: boundsRecorder,
         );
         cursor.x += consumed;
       } else if (child.tagName == 'textPath') {
@@ -205,6 +211,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
           parentRotateStartIndex: rotateListStartIndex,
           parentStyle: effectiveStyle,
           inheritedDistribution: effectiveDistribution,
+          boundsRecorder: boundsRecorder,
         );
       }
     }
@@ -224,6 +231,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
     List<double> parentRotateList = const <double>[],
     int parentRotateStartIndex = 0,
     _ResolvedTextStyle? parentStyle,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final referencedText = _resolveTrefText(trefNode);
     if (referencedText == null || referencedText.isEmpty) return 0.0;
@@ -271,6 +279,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
       colorFilter: colorFilter,
       blendMode: blendMode,
       parentStyle: parentStyle,
+      boundsRecorder: boundsRecorder,
     );
     return consumed;
   }
@@ -315,6 +324,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
     int parentRotateStartIndex = 0,
     _ResolvedTextStyle? parentStyle,
     _TextLengthDistribution? inheritedDistribution,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     // Extract text content for auto-direction detection
     final textContent = _extractTextContent(bdoNode);
@@ -380,6 +390,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
         blendMode: blendMode,
         parentStyle: parentStyle,
         textLengthDistribution: inheritedDistribution,
+        boundsRecorder: boundsRecorder,
       );
       cursor.x += consumed;
     }
@@ -403,6 +414,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
             parentRotateStartIndex: rotateListStartIndex,
             parentStyle: style,
             inheritedDistribution: inheritedDistribution,
+            boundsRecorder: boundsRecorder,
           );
         } else {
           _paintTextNode(
@@ -420,6 +432,7 @@ extension AnimatedSvgPainterTextPaintExtension on AnimatedSvgPainter {
             parentRotateStartIndex: rotateListStartIndex,
             parentStyle: style,
             inheritedDistribution: inheritedDistribution,
+            boundsRecorder: boundsRecorder,
           );
         }
       }

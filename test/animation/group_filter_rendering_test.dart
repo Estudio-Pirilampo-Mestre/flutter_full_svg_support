@@ -725,4 +725,31 @@ void main() {
     final outsidePixel = _pixelAt(pixels, 28, 28);
     expect(outsidePixel[3], 0);
   });
+
+  testWidgets('objectBoundingBox group filter unions repositioned tspan', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <text x="2" y="26" font-size="20" fill="#E4DCEA">i<tspan x="26" y="26">B</tspan></text>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The tspan repositions "B" to x=26. Measuring the text as one
+    // continuous run from x=2 would miss this area; the real layout
+    // pipeline reports both glyph boxes.
+    final tspanPixel = _pixelAt(pixels, 29, 22);
+    expect(tspanPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(tspanPixel[3], greaterThan(0));
+  });
 }
