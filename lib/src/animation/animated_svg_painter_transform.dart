@@ -1013,20 +1013,16 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
               return ui.Rect.zero;
             }
             // A referenced <svg> is painted as a normal node after the use
-            // viewport mapping (_paintSvgUseReference), so its own
-            // transform and x/y still apply. A referenced <symbol> is
-            // painted child-by-child (_paintSymbolReference) and has
-            // neither, so it must not get this mapping.
+            // viewport mapping (_paintSvgUseReference). Reuse the same
+            // transform chain as ordinary nested SVG children: its transform,
+            // x/y translation, and own viewBox-to-viewport mapping. A
+            // referenced <symbol> is painted child-by-child
+            // (_paintSymbolReference), so it must not get this mapping.
             if (referenced.tagName == 'svg') {
-              contentBounds = _transformRect(
-                _resolveNodePaintTransform(referenced),
+              contentBounds = _mapChildBoundsToParent(
+                referenced,
                 contentBounds,
               );
-              final svgX = _getNumber(referenced, 'x') ?? 0.0;
-              final svgY = _getNumber(referenced, 'y') ?? 0.0;
-              if (svgX != 0.0 || svgY != 0.0) {
-                contentBounds = contentBounds.translate(svgX, svgY);
-              }
             }
             final viewportTransform = _resolveUseViewportTransform(
               useNode: node,

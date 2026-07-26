@@ -908,6 +908,40 @@ void main() {
     expect(originPixel[3], 0);
   });
 
+  testWidgets(
+    'objectBoundingBox group filter maps a referenced svg own viewport chain',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <svg id="inner" x="10" width="200" height="100"
+        transform="scale(0.5)" viewBox="0 0 100 100">
+      <rect width="50" height="50" fill="#E4DCEA"/>
+    </svg>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#inner" width="32" height="32"/>
+  </g>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(tester, svg);
+
+      // Rendering applies the referenced SVG's own viewport mapping before
+      // its x/y and transform, then maps it through the <use> viewport. The
+      // resulting source bounds are approximately [9.6, 0]–[17.6, 8].
+      final contentPixel = _pixelAt(pixels, 14, 4);
+      expect(contentPixel[0], isNot(closeTo(0xE4, 2)));
+      expect(contentPixel[3], greaterThan(0));
+      final outsidePixel = _pixelAt(pixels, 4, 4);
+      expect(outsidePixel[3], 0);
+    },
+  );
+
   testWidgets('group filter composites with a partial-alpha mask', (
     tester,
   ) async {
