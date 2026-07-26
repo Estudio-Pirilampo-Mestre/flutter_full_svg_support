@@ -179,10 +179,14 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
       canvas.saveLayer(null, layerPaint);
     }
     final filterPasses = _resolveFilterPassesImpl(this, node);
-    final nodeBoundsForFilterPasses = _getNodeBounds(node);
+    final filterId = _getFilterId(node);
+    // Align with the main paint path: resolve real use geometry and skip
+    // the work for unfiltered uses.
+    final nodeBoundsForFilterPasses = filterId != null
+        ? _resolveFilterTargetBounds(node)
+        : ui.Rect.zero;
 
     ui.Rect? filterRegionClip;
-    final filterId = _getFilterId(node);
     if (filterId != null && document.filters != null) {
       final region = document.filters!.getFilterRegion(filterId);
       if (nodeBoundsForFilterPasses.width > 0 &&

@@ -1026,4 +1026,28 @@ void main() {
     final clippedPixel = _pixelAt(pixels, 24, 16);
     expect(clippedPixel[3], 0);
   });
+
+  testWidgets('use with its own objectBoundingBox filter resolves bounds', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="fullRect" width="32" height="32" fill="#E4DCEA"/>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <use href="#fullRect" filter="url(#obbTurbulence)"/>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    // A use with its own filter previously got zero bounds and fell back to
+    // the unchanged source.
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
 }
