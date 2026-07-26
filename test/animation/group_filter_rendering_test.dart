@@ -328,6 +328,39 @@ void main() {
     expect(fillPixel[3], greaterThan(0));
   });
 
+  testWidgets('nested filter preserves group FillPaint restriction', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="fillOnly" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTile in="FillPaint"/>
+    </filter>
+    <filter id="childFilter">
+      <feColorMatrix type="saturate" values="0.9"/>
+    </filter>
+  </defs>
+  <g filter="url(#fillOnly)">
+    <rect x="14" y="14" width="4" height="4"
+        fill="#FF0000" stroke="#0000FF" stroke-width="20"
+        filter="url(#childFilter)"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The child filter executes its own non-identity pass, but it must not
+    // re-enable stroke painting that the ancestor FillPaint pass disabled.
+    final strokeOnlyPixel = _pixelAt(pixels, 6, 16);
+    expect(strokeOnlyPixel[3], lessThan(10));
+
+    final fillPixel = _pixelAt(pixels, 16, 16);
+    expect(fillPixel[3], greaterThan(0));
+  });
+
   testWidgets('objectBoundingBox group filter resolves path geometry', (
     tester,
   ) async {
@@ -742,6 +775,39 @@ void main() {
     // The stroke ring must be present where fill does not reach.
     final strokePixel = _pixelAt(pixels, 7, 16);
     expect(strokePixel[2], closeTo(0xFF, 2));
+    expect(strokePixel[3], greaterThan(0));
+  });
+
+  testWidgets('nested filter preserves group StrokePaint restriction', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="strokeOnly" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTile in="StrokePaint"/>
+    </filter>
+    <filter id="childFilter">
+      <feColorMatrix type="saturate" values="0.9"/>
+    </filter>
+  </defs>
+  <g filter="url(#strokeOnly)">
+    <rect x="10" y="10" width="12" height="12"
+        fill="#FF0000" stroke="#0000FF" stroke-width="8"
+        filter="url(#childFilter)"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The child filter executes its own non-identity pass, but it must not
+    // re-enable fill painting that the ancestor StrokePaint pass disabled.
+    final fillPixel = _pixelAt(pixels, 16, 16);
+    expect(fillPixel[3], lessThan(10));
+
+    final strokePixel = _pixelAt(pixels, 11, 16);
     expect(strokePixel[3], greaterThan(0));
   });
 
