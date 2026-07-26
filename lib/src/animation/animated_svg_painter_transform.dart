@@ -950,7 +950,52 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   /// of their rendered descendants, expressed in the container's local
   /// coordinate system. The node's own canvas transform is deliberately not
   /// included: callers resolve this after applying that transform.
-  ui.Rect _resolveFilterTargetBounds(SvgNode node) {
+  ///
+  /// Geometry types that [_getNodeBounds] cannot size (path, polygon,
+  /// polyline, use) are resolved here so that transform-origin bounds keep
+  /// their existing behavior. [useGuard] carries the visited reference ids
+  /// to break circular <use> chains.
+  ui.Rect _resolveFilterTargetBounds(SvgNode node, [Set<String>? useGuard]) {
+    switch (node.tagName) {
+      case 'path':
+        final pathData = node.getAttributeValue('d')?.toString();
+        if (pathData == null || pathData.isEmpty) {
+          return ui.Rect.zero;
+        }
+        return _buildPath(pathData)?.getBounds() ?? ui.Rect.zero;
+      case 'polygon':
+      case 'polyline':
+        final points = _parsePoints(node);
+        if (points.length < 2) {
+          return ui.Rect.zero;
+        }
+        var minX = points.first.dx;
+        var minY = points.first.dy;
+        var maxX = minX;
+        var maxY = minY;
+        for (final point in points) {
+          minX = minX < point.dx ? minX : point.dx;
+          minY = minY < point.dy ? minY : point.dy;
+          maxX = maxX > point.dx ? maxX : point.dx;
+          maxY = maxY > point.dy ? maxY : point.dy;
+        }
+        return ui.Rect.fromLTRB(minX, minY, maxX, maxY);
+      case 'use':
+        final hrefId = _extractHrefId(node);
+        if (hrefId == null || hrefId.isEmpty) {
+          return ui.Rect.zero;
+        }
+        final guard = useGuard ?? <String>{};
+        if (!guard.add(hrefId)) {
+          return ui.Rect.zero;
+        }
+        final referenced = document.root.findById(hrefId);
+        if (referenced == null ||
+            !_isUseReferenceAllowedTag(referenced.tagName)) {
+          return ui.Rect.zero;
+        }
+        return _resolveFilterTargetBounds(referenced, guard);
+    }
     if (!_isFilterBoundsContainer(node)) {
       return _getNodeBounds(node);
     }
@@ -961,7 +1006,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         continue;
       }
 
-      final childBounds = _resolveFilterTargetBounds(child);
+      final childBounds = _resolveFilterTargetBounds(child, useGuard);
       if (childBounds.width <= 0 || childBounds.height <= 0) {
         continue;
       }
@@ -1028,6 +1073,14 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
             transform *
             Matrix4x4(Float64List.fromList(viewportTransform.storage));
       }
+    } else if (child.tagName == 'use') {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
     }
 
     return _transformRect(transform, bounds);

@@ -445,4 +445,122 @@ void main() {
     expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
     expect(centerPixel[3], greaterThan(0));
   });
+
+  testWidgets('objectBoundingBox group filter resolves polygon geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <polygon points="0,0 32,0 32,32 0,32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves polyline geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <polyline points="0,0 32,0 32,32 0,32 0,0" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves transformed path', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <path d="M0 0 H8 V8 H0 Z" transform="translate(12 12)" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves positioned use', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="smallRect" width="8" height="8" fill="#E4DCEA"/>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#smallRect" x="12" y="12"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves nested container path', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <g>
+      <path d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+    </g>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
 }
