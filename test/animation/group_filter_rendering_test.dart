@@ -334,4 +334,115 @@ void main() {
       expect(mixedPixel[3], closeTo(expectedMixedAlpha, 2));
     },
   );
+
+  testWidgets('group FillPaint input excludes descendant strokes', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="fillOnly" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTile in="FillPaint"/>
+    </filter>
+  </defs>
+  <g filter="url(#fillOnly)">
+    <rect x="14" y="14" width="4" height="4"
+        fill="#FF0000" stroke="#0000FF" stroke-width="20"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The tiny rect spans [14,18]; its 20-wide stroke covers (6,16) without
+    // covering it with fill. FillPaint must not contain the stroke, so this
+    // pixel stays transparent.
+    final strokeOnlyPixel = _pixelAt(pixels, 6, 16);
+    expect(strokeOnlyPixel[3], 0);
+
+    // The fill itself must still reach the output.
+    final fillPixel = _pixelAt(pixels, 16, 16);
+    expect(fillPixel[0], closeTo(0xFF, 2));
+    expect(fillPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves path geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <path d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    // A fallback renders the unchanged lavender source; a real turbulence
+    // pass replaces it with noise.
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves use geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="fullRect" width="32" height="32" fill="#E4DCEA"/>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#fullRect"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets('group filter still applies under an identity white mask', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turbulence" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+    <mask id="whiteMask" maskUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <rect width="32" height="32" fill="#FFFFFF"/>
+    </mask>
+  </defs>
+  <g filter="url(#turbulence)" mask="url(#whiteMask)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    // The white mask is an identity operation, so the turbulence pass must
+    // still run instead of painting the unchanged lavender source.
+    expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
 }
