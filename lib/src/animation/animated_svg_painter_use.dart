@@ -253,18 +253,14 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
       }
     }
 
-    if (_isIdentityOnlyFilterPasses(filterPasses)) {
-      paintReferencedContent(null, null, null);
-    } else {
-      _paintWithFilterPassesImpl(
-        this,
-        canvas,
-        filterPasses,
-        paintReferencedContent,
-        targetNodeBounds: nodeBoundsForFilterPasses,
-        filterRegionClip: filterRegionClip,
-      );
-    }
+    _paintWithFilterPassesImpl(
+      this,
+      canvas,
+      filterPasses,
+      paintReferencedContent,
+      targetNodeBounds: nodeBoundsForFilterPasses,
+      filterRegionClip: filterRegionClip,
+    );
 
     if (opacity < 1.0) {
       canvas.restore();
