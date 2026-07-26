@@ -954,7 +954,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   /// Geometry types that [_getNodeBounds] cannot size (path, polygon,
   /// polyline, use) are resolved here so that transform-origin bounds keep
   /// their existing behavior. [useGuard] carries the visited reference ids
-  /// to break circular <use> chains.
+  /// to break circular `use` chains.
   ui.Rect _resolveFilterTargetBounds(SvgNode node, [Set<String>? useGuard]) {
     switch (node.tagName) {
       case 'path':
@@ -995,25 +995,46 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
           return ui.Rect.zero;
         }
         // Per SVG 1.1 §5.6, use→symbol establishes a viewport sized by the
-        // use element's width/height. The use x/y translation is applied
-        // later by _mapChildBoundsToParent.
+        // use element's width/height. Bounds come from the symbol's actual
+        // content, mapped through the same viewBox→viewport transform the
+        // renderer applies, and clipped to the viewport when the renderer
+        // clips. The use x/y translation is applied later by
+        // _mapChildBoundsToParent.
         if (referenced.tagName == 'symbol') {
-          final width = _getNumber(node, 'width');
-          final height = _getNumber(node, 'height');
-          if (width != null && height != null && width > 0 && height > 0) {
-            return ui.Rect.fromLTWH(0, 0, width, height);
+          final contentBounds = _unionChildrenFilterBounds(referenced, guard);
+          if (contentBounds.width <= 0 || contentBounds.height <= 0) {
+            return ui.Rect.zero;
           }
-          return _getViewBox(referenced) ?? ui.Rect.zero;
+          final viewportTransform = _resolveUseViewportTransform(
+            useNode: node,
+            referenceNode: referenced,
+          );
+          if (viewportTransform == null) {
+            // No viewBox (or no explicit viewport size): the symbol content
+            // is rendered unscaled in the use coordinate system.
+            return contentBounds;
+          }
+          var mapped = _transformRect(
+            Matrix4x4(Float64List.fromList(viewportTransform.matrix.storage)),
+            contentBounds,
+          );
+          final clipRect = viewportTransform.clipRect;
+          if (clipRect != null) {
+            mapped = mapped.intersect(clipRect);
+          }
+          return mapped;
         }
         return _resolveFilterTargetBounds(referenced, guard);
       case 'switch':
         // Mirror the render path: only the conditionally selected child
-        // contributes geometry.
+        // contributes geometry, mapped into the switch coordinate system
+        // like any other child of a container.
         final activeChild = resolveActiveSwitchChild(node);
         if (activeChild == null) {
           return ui.Rect.zero;
         }
-        return _resolveFilterTargetBounds(activeChild, useGuard);
+        final childBounds = _resolveFilterTargetBounds(activeChild, useGuard);
+        return _mapChildBoundsToParent(activeChild, childBounds);
       case 'text':
         return _resolveTextFilterBounds(node);
     }
@@ -1021,6 +1042,12 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
       return _getNodeBounds(node);
     }
 
+    return _unionChildrenFilterBounds(node, useGuard);
+  }
+
+  /// Unites the filter bounds of [node]'s rendered children, each mapped
+  /// into [node]'s local coordinate system.
+  ui.Rect _unionChildrenFilterBounds(SvgNode node, Set<String>? useGuard) {
     ui.Rect? bounds;
     for (final child in node.children) {
       if (!_contributesToFilterBounds(child)) {

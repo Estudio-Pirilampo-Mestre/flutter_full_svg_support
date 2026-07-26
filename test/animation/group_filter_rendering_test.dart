@@ -664,4 +664,65 @@ void main() {
     expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
     expect(centerPixel[3], greaterThan(0));
   });
+
+  testWidgets('objectBoundingBox group filter maps switch child transform', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <switch>
+      <path d="M0 0 H8 V8 H0 Z" transform="translate(16 16)" fill="#E4DCEA"/>
+    </switch>
+  </g>
+</svg>''';
+
+    // The path occupies [16,24] after its transform. The filter region is
+    // derived from the mapped bounds, so the turbulence pass covers the
+    // translated area instead of the origin.
+    final insidePixel = _pixelAt(await _renderSvgPixels(tester, svg), 20, 20);
+    expect(insidePixel[0], isNot(closeTo(0xE4, 2)));
+    expect(insidePixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter uses symbol content bounds', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="quarter" viewBox="0 0 100 100">
+      <rect width="50" height="50" fill="#E4DCEA"/>
+    </symbol>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#quarter" width="32" height="32"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The symbol content fills only a quarter of its viewBox, mapping to
+    // [0,16] in the use viewport. The filter region stays near that area.
+    final contentPixel = _pixelAt(pixels, 8, 8);
+    expect(contentPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(contentPixel[3], greaterThan(0));
+
+    // Far outside the content-derived filter region nothing is painted.
+    // A viewport-sized bound would have leaked turbulence here.
+    final outsidePixel = _pixelAt(pixels, 28, 28);
+    expect(outsidePixel[3], 0);
+  });
 }
