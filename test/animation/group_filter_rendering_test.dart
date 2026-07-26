@@ -633,6 +633,62 @@ void main() {
     expect(centerPixel[3], greaterThan(0));
   });
 
+  testWidgets('objectBoundingBox group filter resolves vertical text geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <text x="18" y="4" font-size="24" font-weight="bold"
+        writing-mode="vertical-rl" fill="#E4DCEA">H</text>
+  </g>
+</svg>''';
+
+    final glyphPixel = _pixelAt(await _renderSvgPixels(tester, svg), 10, 10);
+
+    // The vertical Latin glyph is rotated by the text painter. Its target
+    // bounds must be recorded so the objectBoundingBox turbulence pass runs.
+    expect(glyphPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(glyphPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter records rotated glyph bounds', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <text x="23" y="23" font-size="24" font-weight="bold" rotate="-90"
+        fill="#E4DCEA">H</text>
+  </g>
+</svg>''';
+
+    final rotatedGlyphPixel = _pixelAt(
+      await _renderSvgPixels(tester, svg),
+      15,
+      22,
+    );
+
+    // This pixel is inside the rotated H but outside its pre-rotation box.
+    // A recorded unrotated box clips the objectBoundingBox filter output here.
+    expect(rotatedGlyphPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(rotatedGlyphPixel[3], greaterThan(0));
+  });
+
   testWidgets('objectBoundingBox group filter resolves use-symbol geometry', (
     tester,
   ) async {
