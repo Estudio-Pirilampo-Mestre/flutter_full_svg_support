@@ -989,42 +989,61 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         if (!guard.add(hrefId)) {
           return ui.Rect.zero;
         }
-        final referenced = document.root.findById(hrefId);
-        if (referenced == null ||
-            !_isUseReferenceAllowedTag(referenced.tagName)) {
-          return ui.Rect.zero;
-        }
-        // Per SVG 1.1 §5.6, use→symbol establishes a viewport sized by the
-        // use element's width/height. Bounds come from the symbol's actual
-        // content, mapped through the same viewBox→viewport transform the
-        // renderer applies, and clipped to the viewport when the renderer
-        // clips. The use x/y translation is applied later by
-        // _mapChildBoundsToParent.
-        if (referenced.tagName == 'symbol') {
-          final contentBounds = _unionChildrenFilterBounds(referenced, guard);
-          if (contentBounds.width <= 0 || contentBounds.height <= 0) {
+        // The guard is reference-chain scoped: remove the id when the
+        // recursion returns so sibling uses of the same target are not
+        // mistaken for circular references.
+        try {
+          final referenced = document.root.findById(hrefId);
+          if (referenced == null ||
+              !_isUseReferenceAllowedTag(referenced.tagName)) {
             return ui.Rect.zero;
           }
-          final viewportTransform = _resolveUseViewportTransform(
-            useNode: node,
-            referenceNode: referenced,
-          );
-          if (viewportTransform == null) {
-            // No viewBox (or no explicit viewport size): the symbol content
-            // is rendered unscaled in the use coordinate system.
-            return contentBounds;
+          // Per SVG 1.1 §5.6, use→symbol and use→svg establish a viewport
+          // sized by the use element's width/height. Bounds come from the
+          // referenced content, mapped through the same viewBox→viewport
+          // transform the renderer applies, and clipped to the viewport
+          // when the renderer clips. The use x/y translation is applied
+          // later by _mapChildBoundsToParent.
+          if (referenced.tagName == 'symbol' || referenced.tagName == 'svg') {
+            final contentBounds = _unionChildrenFilterBounds(
+              referenced,
+              guard,
+            );
+            if (contentBounds.width <= 0 || contentBounds.height <= 0) {
+              return ui.Rect.zero;
+            }
+            final viewportTransform = _resolveUseViewportTransform(
+              useNode: node,
+              referenceNode: referenced,
+            );
+            if (viewportTransform == null) {
+              // No viewBox (or no explicit viewport size): the content is
+              // rendered unscaled in the use coordinate system.
+              return contentBounds;
+            }
+            var mapped = _transformRect(
+              Matrix4x4(
+                Float64List.fromList(viewportTransform.matrix.storage),
+              ),
+              contentBounds,
+            );
+            final clipRect = viewportTransform.clipRect;
+            if (clipRect != null) {
+              mapped = mapped.intersect(clipRect);
+            }
+            return mapped;
           }
-          var mapped = _transformRect(
-            Matrix4x4(Float64List.fromList(viewportTransform.matrix.storage)),
-            contentBounds,
+          // Other referenced elements are cloned with their own transform
+          // into the use shadow tree, so map the referenced root's paint
+          // transform like the render path does.
+          final referencedBounds = _resolveFilterTargetBounds(
+            referenced,
+            guard,
           );
-          final clipRect = viewportTransform.clipRect;
-          if (clipRect != null) {
-            mapped = mapped.intersect(clipRect);
-          }
-          return mapped;
+          return _mapChildBoundsToParent(referenced, referencedBounds);
+        } finally {
+          guard.remove(hrefId);
         }
-        return _resolveFilterTargetBounds(referenced, guard);
       case 'switch':
         // Mirror the render path: only the conditionally selected child
         // contributes geometry, mapped into the switch coordinate system

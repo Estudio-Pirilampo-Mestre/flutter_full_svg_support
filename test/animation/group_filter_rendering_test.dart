@@ -752,4 +752,278 @@ void main() {
     expect(tspanPixel[0], isNot(closeTo(0xE4, 2)));
     expect(tspanPixel[3], greaterThan(0));
   });
+
+  testWidgets('group StrokePaint input excludes descendant fills', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="strokeOnly" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTile in="StrokePaint"/>
+    </filter>
+  </defs>
+  <g filter="url(#strokeOnly)">
+    <rect x="10" y="10" width="12" height="12"
+        fill="#FF0000" stroke="#0000FF" stroke-width="8"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The fill-only area (beyond the stroke ring) must not reach the
+    // StrokePaint output.
+    final fillPixel = _pixelAt(pixels, 16, 16);
+    expect(fillPixel[3], 0);
+
+    // The stroke ring must be present where fill does not reach.
+    final strokePixel = _pixelAt(pixels, 7, 16);
+    expect(strokePixel[2], closeTo(0xFF, 2));
+    expect(strokePixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter resolves duplicate sibling use', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="dupRect" width="8" height="8" fill="#E4DCEA"/>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#dupRect"/>
+    <use href="#dupRect" x="20"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // Both siblings must contribute bounds; a chain-scoped guard bug would
+    // drop the second use and shrink the filter region to the first rect.
+    final firstPixel = _pixelAt(pixels, 4, 4);
+    expect(firstPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(firstPixel[3], greaterThan(0));
+    final secondPixel = _pixelAt(pixels, 24, 4);
+    expect(secondPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(secondPixel[3], greaterThan(0));
+  });
+
+  testWidgets('objectBoundingBox group filter maps use target root transform', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="shiftedRect" width="8" height="8"
+        transform="translate(16 16)" fill="#E4DCEA"/>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#shiftedRect"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    // The referenced rect carries its own transform; the filter region must
+    // cover the translated position.
+    final shiftedPixel = _pixelAt(pixels, 20, 20);
+    expect(shiftedPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(shiftedPixel[3], greaterThan(0));
+    final originPixel = _pixelAt(pixels, 4, 4);
+    expect(originPixel[3], 0);
+  });
+
+  testWidgets('objectBoundingBox group filter maps use-svg viewport', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <svg id="inner" viewBox="0 0 100 100">
+      <rect width="50" height="50" fill="#E4DCEA"/>
+    </svg>
+    <filter id="obbTurbulence">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#inner" width="32" height="32"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    final contentPixel = _pixelAt(pixels, 8, 8);
+    expect(contentPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(contentPixel[3], greaterThan(0));
+    final outsidePixel = _pixelAt(pixels, 28, 28);
+    expect(outsidePixel[3], 0);
+  });
+
+  testWidgets('group filter composites with a partial-alpha mask', (
+    tester,
+  ) async {
+    const turbulenceOnlySvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#turb)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+    const maskedSvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+    <mask id="halfMask" maskUnits="userSpaceOnUse" mask-type="alpha"
+        x="0" y="0" width="32" height="32">
+      <rect width="32" height="32" fill="#FFFFFF" fill-opacity="0.5"/>
+    </mask>
+  </defs>
+  <g filter="url(#turb)" mask="url(#halfMask)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
+    final masked = _pixelAt(await _renderSvgPixels(tester, maskedSvg), 16, 16);
+
+    // The filter still runs under the mask, and the mask halves the alpha.
+    expect(masked[0], isNot(closeTo(0xE4, 2)));
+    expect(masked[3], closeTo((unmasked[3] * 0.5).round(), 4));
+  });
+
+  testWidgets('group filter composites with a luminance mask', (
+    tester,
+  ) async {
+    const turbulenceOnlySvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#turb)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+    const maskedSvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+    <mask id="grayMask" maskUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <rect width="32" height="32" fill="#808080"/>
+    </mask>
+  </defs>
+  <g filter="url(#turb)" mask="url(#grayMask)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
+    final masked = _pixelAt(await _renderSvgPixels(tester, maskedSvg), 16, 16);
+
+    // #808080 has ~0.5 luminance, so the filtered output is half masked.
+    expect(masked[0], isNot(closeTo(0xE4, 2)));
+    expect(masked[3], closeTo((unmasked[3] * 0.5).round(), 8));
+  });
+
+  testWidgets('group filter composites with group opacity', (tester) async {
+    const turbulenceOnlySvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#turb)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+    const opacitySvg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#turb)" opacity="0.5">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final unmasked = _pixelAt(await _renderSvgPixels(tester, turbulenceOnlySvg), 16, 16);
+    final withOpacity = _pixelAt(await _renderSvgPixels(tester, opacitySvg), 16, 16);
+
+    expect(withOpacity[0], isNot(closeTo(0xE4, 2)));
+    expect(withOpacity[3], closeTo((unmasked[3] * 0.5).round(), 4));
+  });
+
+  testWidgets('group filter output is clipped by clip-path', (tester) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="turb" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+    <clipPath id="leftHalf">
+      <rect x="0" y="0" width="16" height="32"/>
+    </clipPath>
+  </defs>
+  <g filter="url(#turb)" clip-path="url(#leftHalf)">
+    <rect width="32" height="32" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    final insidePixel = _pixelAt(pixels, 8, 16);
+    expect(insidePixel[0], isNot(closeTo(0xE4, 2)));
+    expect(insidePixel[3], greaterThan(0));
+    final clippedPixel = _pixelAt(pixels, 24, 16);
+    expect(clippedPixel[3], 0);
+  });
 }
