@@ -6,7 +6,11 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:full_svg_flutter/src/animation/animated_svg_picture.dart';
 
-Future<Uint8List> _renderSvgPixels(WidgetTester tester, String svg) async {
+Future<Uint8List> _renderSvgPixels(
+  WidgetTester tester,
+  String svg, {
+  bool waitForAsyncFilterImages = false,
+}) async {
   final repaintBoundaryKey = GlobalKey();
   await tester.pumpWidget(
     Directionality(
@@ -26,6 +30,17 @@ Future<Uint8List> _renderSvgPixels(WidgetTester tester, String svg) async {
   );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
+  if (waitForAsyncFilterImages) {
+    // Source-based displacement and lighting filters rasterize asynchronously.
+    // Alternate real time with frames so the completed precompute can schedule
+    // and render its repaint.
+    for (var i = 0; i < 3; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+    }
+  }
 
   final pixels = await tester.runAsync<Uint8List?>(() async {
     final boundary =
@@ -462,6 +477,128 @@ void main() {
     final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
 
     expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
+    expect(centerPixel[3], greaterThan(0));
+  });
+
+  testWidgets(
+    'objectBoundingBox group displacement filter resolves path geometry',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceAlpha" scale="16"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbDisplacement)">
+    <path d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+      final rightEdgePixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        28,
+        16,
+      );
+
+      // SourceAlpha makes the map sample beyond the source at this edge. A
+      // zero target bound falls back to the unchanged opaque lavender source.
+      expect(rightEdgePixel[3], lessThan(10));
+    },
+  );
+
+  testWidgets(
+    'objectBoundingBox group displacement filter resolves use geometry',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <path id="fullPath" d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+    <filter id="obbDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceAlpha" scale="16"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbDisplacement)">
+    <use href="#fullPath"/>
+  </g>
+</svg>''';
+
+      final rightEdgePixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        28,
+        16,
+      );
+
+      expect(rightEdgePixel[3], lessThan(10));
+    },
+  );
+
+  testWidgets(
+    'objectBoundingBox group lighting filter resolves path geometry',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbLighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+  </defs>
+  <g filter="url(#obbLighting)">
+    <path d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+  </g>
+</svg>''';
+
+      final centerPixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        16,
+        16,
+      );
+
+      // Lighting output is green, rather than the unfiltered lavender source.
+      expect(centerPixel[1], greaterThan(centerPixel[0] + 100));
+      expect(centerPixel[1], greaterThan(centerPixel[2] + 100));
+      expect(centerPixel[3], greaterThan(0));
+    },
+  );
+
+  testWidgets('objectBoundingBox group lighting filter resolves use geometry', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <path id="fullPath" d="M0 0 H32 V32 H0 Z" fill="#E4DCEA"/>
+    <filter id="obbLighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+  </defs>
+  <g filter="url(#obbLighting)">
+    <use href="#fullPath"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(
+      await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+      16,
+      16,
+    );
+
+    expect(centerPixel[1], greaterThan(centerPixel[0] + 100));
+    expect(centerPixel[1], greaterThan(centerPixel[2] + 100));
     expect(centerPixel[3], greaterThan(0));
   });
 
