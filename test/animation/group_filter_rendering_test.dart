@@ -232,6 +232,29 @@ void main() {
     expect(centerPixel[3], closeTo(191, 3));
   });
 
+  testWidgets('explicit identity filter clips to its declared region', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="identity" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="16" height="32">
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="32" height="32" fill="#204060" filter="url(#identity)"/>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+
+    expect(_pixelAt(pixels, 8, 16)[3], 255);
+    expect(_pixelAt(pixels, 24, 16)[3], 0);
+  });
+
   testWidgets(
     'group filter preserves ordinary passes around a turbulence pass',
     (tester) async {
@@ -633,10 +656,10 @@ void main() {
     expect(centerPixel[3], greaterThan(0));
   });
 
-  testWidgets('objectBoundingBox group filter resolves vertical text geometry', (
-    tester,
-  ) async {
-    const svg = '''
+  testWidgets(
+    'objectBoundingBox group filter resolves vertical text geometry',
+    (tester) async {
+      const svg = '''
 <svg width="32" height="32" viewBox="0 0 32 32"
     xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -651,13 +674,14 @@ void main() {
   </g>
 </svg>''';
 
-    final glyphPixel = _pixelAt(await _renderSvgPixels(tester, svg), 10, 10);
+      final glyphPixel = _pixelAt(await _renderSvgPixels(tester, svg), 10, 10);
 
-    // The vertical Latin glyph is rotated by the text painter. Its target
-    // bounds must be recorded so the objectBoundingBox turbulence pass runs.
-    expect(glyphPixel[0], isNot(closeTo(0xE4, 2)));
-    expect(glyphPixel[3], greaterThan(0));
-  });
+      // The vertical Latin glyph is rotated by the text painter. Its target
+      // bounds must be recorded so the objectBoundingBox turbulence pass runs.
+      expect(glyphPixel[0], isNot(closeTo(0xE4, 2)));
+      expect(glyphPixel[3], greaterThan(0));
+    },
+  );
 
   testWidgets('objectBoundingBox group filter records rotated glyph bounds', (
     tester,
