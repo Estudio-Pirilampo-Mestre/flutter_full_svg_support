@@ -632,6 +632,32 @@ void main() {
     expect(centerPixel[3], greaterThan(0));
   });
 
+  testWidgets(
+    'objectBoundingBox identity group filter resolves percentage rect geometry',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="identity" x="0" y="0" width="1" height="1">
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#identity)">
+    <rect x="25%" y="25%" width="50%" height="50%" fill="#FF0000"/>
+  </g>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(tester, svg);
+
+      expect(_pixelAt(pixels, 16, 16)[3], 255);
+      expect(_pixelAt(pixels, 4, 4)[3], 0);
+      expect(_pixelAt(pixels, 28, 28)[3], 0);
+    },
+  );
+
   testWidgets('objectBoundingBox group filter resolves polygon geometry', (
     tester,
   ) async {
