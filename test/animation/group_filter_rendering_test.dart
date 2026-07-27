@@ -232,6 +232,38 @@ void main() {
     expect(centerPixel[3], closeTo(191, 3));
   });
 
+  testWidgets('group filter uses the composited SourceAlpha input', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sourceAlpha" filterUnits="userSpaceOnUse"
+        x="0" y="0" width="32" height="32">
+      <feMerge>
+        <feMergeNode in="SourceAlpha"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#sourceAlpha)">
+    <rect x="4" y="4" width="24" height="24"
+        fill="#204060" fill-opacity="0.5"/>
+  </g>
+</svg>''';
+
+    final pixels = await _renderSvgPixels(tester, svg);
+    final sourceAlphaPixel = _pixelAt(pixels, 16, 16);
+
+    // SourceAlpha retains the composited group's alpha but removes its source
+    // color. This distinguishes it from an unfiltered SourceGraphic pass.
+    // rawRgba stores the semi-transparent white result premultiplied.
+    for (final component in sourceAlphaPixel) {
+      expect(component, closeTo(128, 1));
+    }
+    expect(_pixelAt(pixels, 2, 16)[3], 0);
+  });
+
   testWidgets('explicit identity filter clips to its declared region', (
     tester,
   ) async {
