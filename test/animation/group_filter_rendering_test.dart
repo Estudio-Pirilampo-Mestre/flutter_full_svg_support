@@ -852,6 +852,38 @@ void main() {
   });
 
   testWidgets(
+    'objectBoundingBox group filter records spacingAndGlyphs textLength bounds',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <text x="2" y="26" font-size="24" textLength="8"
+        lengthAdjust="spacingAndGlyphs" fill="#E4DCEA">MMMM</text>
+  </g>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(tester, svg);
+
+      final scaledTextPixel = _pixelAt(pixels, 6, 16);
+      expect(scaledTextPixel[0], isNot(closeTo(0xE4, 2)));
+      expect(scaledTextPixel[3], greaterThan(0));
+
+      // The actual text is horizontally scaled to x=[2,10]. A recorder that
+      // keeps the pre-scale paragraph width lets the objectBoundingBox
+      // turbulence region leak far to the right.
+      final outsideScaledTextPixel = _pixelAt(pixels, 20, 16);
+      expect(outsideScaledTextPixel[3], 0);
+    },
+  );
+
+  testWidgets(
     'objectBoundingBox group filter resolves vertical text geometry',
     (tester) async {
       const svg = '''
