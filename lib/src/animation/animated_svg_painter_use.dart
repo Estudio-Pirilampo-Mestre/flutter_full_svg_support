@@ -248,6 +248,7 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
       paintReferencedContent,
       targetNodeBounds: filterState.targetBounds,
       filterRegionClip: filterState.regionClip,
+      requiresFilterExecution: filterState.requiresFilterExecution,
     );
 
     if (opacity < 1.0) {

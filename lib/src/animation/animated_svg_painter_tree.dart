@@ -29,11 +29,17 @@ class _ResolvedNodeFilterState {
   const _ResolvedNodeFilterState({
     required this.passes,
     required this.targetBounds,
+    required this.requiresFilterExecution,
     this.regionClip,
   });
 
   final List<SvgFilterPaintPass> passes;
   final ui.Rect targetBounds;
+
+  /// Whether this node has a filter reference that must retain filter
+  /// semantics even when its resolved passes are visually identity.
+  final bool requiresFilterExecution;
+
   final ui.Rect? regionClip;
 }
 
@@ -136,9 +142,12 @@ _ResolvedNodeFilterState _resolveNodeFilterState(
 ) {
   final passes = _resolveFilterPassesImpl(painter, node);
   final filterId = painter._getFilterId(node);
-  // Filter target bounds are only consumed by the filter executor. Skip the
-  // potentially expensive resolution for unfiltered nodes and identity passes.
-  final targetBounds = filterId != null && !_isIdentityOnlyFilterPasses(passes)
+  // An explicit filter reference must retain its region clip even when its
+  // resolved passes are visually identity. Only nodes without filter handling
+  // can skip the target-bounds work entirely.
+  final requiresFilterExecution =
+      filterId != null && painter.document.filters != null;
+  final targetBounds = requiresFilterExecution
       ? painter._resolveFilterTargetBounds(node)
       : ui.Rect.zero;
 
@@ -153,6 +162,7 @@ _ResolvedNodeFilterState _resolveNodeFilterState(
   return _ResolvedNodeFilterState(
     passes: passes,
     targetBounds: targetBounds,
+    requiresFilterExecution: requiresFilterExecution,
     regionClip: regionClip,
   );
 }
@@ -187,6 +197,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'circle':
@@ -203,6 +214,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'ellipse':
@@ -219,6 +231,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'path':
@@ -235,6 +248,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'polygon':
@@ -251,6 +265,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'polyline':
@@ -267,6 +282,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'line':
@@ -283,6 +299,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'image':
@@ -299,6 +316,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
           isImageNode: true,
         );
         break;
@@ -316,6 +334,7 @@ void _paintNodeContent(
           ),
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'tspan':
@@ -347,6 +366,7 @@ void _paintNodeContent(
           filterPasses: filterState.passes,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
           foreignObjectParent: foreignObjectParent,
           useContext: useContext,
         )) {
@@ -427,6 +447,7 @@ bool _paintGroupWithOpacity(
   Set<String> useStack, {
   required List<SvgFilterPaintPass> filterPasses,
   required ui.Rect targetNodeBounds,
+  required bool requiresFilterExecution,
   ui.Rect? filterRegionClip,
   SvgNode? foreignObjectParent,
   _UseInheritanceContext? useContext,
@@ -465,9 +486,11 @@ bool _paintGroupWithOpacity(
   final groupBlendMode = painter._resolveMixBlendMode(node);
   final hasGroupBlendMode = groupBlendMode != null;
 
-  // Filter passes describe the complete output of the filter graph. A group
-  // must execute every pass against the composited image of its children.
-  final hasFilter = !_isIdentityOnlyFilterPasses(filterPasses);
+  // Filter passes describe the complete output of the filter graph. An
+  // explicit identity filter still needs execution so its declared region
+  // clips the composited image of the children.
+  final hasFilter =
+      requiresFilterExecution || !_isIdentityOnlyFilterPasses(filterPasses);
 
   // Determine if saveLayer is needed for compositing
   final needsLayer =
@@ -744,10 +767,10 @@ List<SvgFilterPaintPass> _resolveFilterPassesImpl(
 /// selectively disabled) are not identity either: they suppress one paint
 /// channel and must go through the pass executor.
 ///
-/// Callers use this to short-circuit filter handling: group painting can skip
-/// creating a filter layer, `<use>` can paint its referenced content
-/// directly, and pass resolution can special-case a lone displacement-map
-/// primitive that resolved to an identity pass.
+/// Nodes without a filter reference use this to short-circuit filter handling.
+/// An explicit filter that resolves to this pass must still execute so its
+/// declared filter region is applied. Pass resolution also uses the check to
+/// special-case a lone displacement-map primitive that resolved to identity.
 bool _isIdentityOnlyFilterPasses(List<SvgFilterPaintPass> passes) {
   if (passes.length != 1) {
     return false;
@@ -1210,13 +1233,15 @@ void _paintWithFilterPassesImpl(
   paint, {
   ui.Rect? targetNodeBounds,
   ui.Rect? filterRegionClip,
+  bool requiresFilterExecution = false,
   bool isImageNode = false,
 }) {
   // An unfiltered node resolves to a single fully-default identity pass.
   // Paint it directly without entering the executor so descendant rendering
   // retains the ambient channel restrictions imposed by an ancestor group
-  // pass (for example, FillPaint or StrokePaint).
-  if (_isIdentityOnlyFilterPasses(passes)) {
+  // pass (for example, FillPaint or StrokePaint). An explicit identity filter
+  // still enters the executor to apply its declared filter region.
+  if (!requiresFilterExecution && _isIdentityOnlyFilterPasses(passes)) {
     paint(null, null, null);
     return;
   }
