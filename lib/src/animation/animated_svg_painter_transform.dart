@@ -951,12 +951,29 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   /// coordinate system. The node's own canvas transform is deliberately not
   /// included: callers resolve this after applying that transform.
   ///
-  /// Geometry types that [_getNodeBounds] cannot size (path, polygon,
-  /// polyline, use) are resolved here so that transform-origin bounds keep
-  /// their existing behavior. [useGuard] carries the visited reference ids
-  /// to break circular `use` chains.
+  /// Viewport-relative rect geometry and geometry types that [_getNodeBounds]
+  /// cannot size (path, polygon, polyline, use) are resolved here so that
+  /// transform-origin bounds keep their existing behavior. [useGuard] tracks
+  /// visited reference ids to break circular `use` chains.
   ui.Rect _resolveFilterTargetBounds(SvgNode node, [Set<String>? useGuard]) {
     switch (node.tagName) {
+      case 'rect':
+        final x =
+            _getLengthWithViewportSupport(node, 'x', isHorizontal: true) ?? 0.0;
+        final y =
+            _getLengthWithViewportSupport(node, 'y', isHorizontal: false) ??
+            0.0;
+        final width =
+            _getLengthWithViewportSupport(node, 'width', isHorizontal: true) ??
+            0.0;
+        final height =
+            _getLengthWithViewportSupport(
+              node,
+              'height',
+              isHorizontal: false,
+            ) ??
+            0.0;
+        return ui.Rect.fromLTWH(x, y, width, height);
       case 'path':
         final pathData = node.getAttributeValue('d')?.toString();
         if (pathData == null || pathData.isEmpty) {
