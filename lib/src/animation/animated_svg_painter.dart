@@ -296,6 +296,15 @@ class AnimatedSvgPainter extends CustomPainter {
     return _getNodeBounds(node);
   }
 
+  /// Measures the rendered SourceGraphic bounds used to size a filter target.
+  ///
+  /// Unlike [measureNodeBounds], this includes drawable descendant geometry
+  /// for containers and resolves geometry that is referenced through `<use>`.
+  /// It intentionally does not change transform-origin sizing semantics.
+  ui.Rect measureFilterTargetBounds(SvgNode node) {
+    return _resolveFilterTargetBounds(node);
+  }
+
   /// Paints a node subtree to the provided canvas.
   ///
   /// When [ignoreFilter] is true, the node-level `filter` attribute is

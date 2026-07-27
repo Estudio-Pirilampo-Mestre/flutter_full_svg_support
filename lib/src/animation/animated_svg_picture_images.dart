@@ -322,48 +322,46 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     void visit(SvgNode node) {
       final filterId = _extractFilterIdFromNode(node);
       if (filterId != null) {
+        final primitives = filters.getAllById(filterId);
+        if (primitives.length == 1 &&
+            primitives.single is SvgDisplacementMapFilter) {
+          final primitive = primitives.single as SvgDisplacementMapFilter;
+          final textureSource = _resolveDisplacementBuiltInInput(
+            primitive.input,
+            defaultToSourceGraphic: true,
+          );
+          final mapSource = _resolveDisplacementBuiltInInput(
+            primitive.input2,
+            defaultToSourceGraphic: false,
+          );
+          if (textureSource != null &&
+              mapSource != null &&
+              textureSource != _DisplacementInputSource.href &&
+              mapSource != _DisplacementInputSource.href) {
+            final nodeKey = node.id ?? node.tagName;
+            final requestKey =
+                '$filterId|$textureSource.name|$mapSource.name|$nodeKey';
+            if (seenRequestKeys.add(requestKey)) {
+              requests.add(
+                _DisplacementImageRequest.sourceBased(
+                  filterId: filterId,
+                  sourceNode: node,
+                  textureSource: textureSource,
+                  mapSource: mapSource,
+                  displacementFilter: primitive,
+                ),
+              );
+            }
+          }
+        }
+
         final targetWidth = _parsePositivePixelLength(
           node.getAttributeValue('width')?.toString(),
         );
         final targetHeight = _parsePositivePixelLength(
           node.getAttributeValue('height')?.toString(),
         );
-
         if (targetWidth != null && targetHeight != null) {
-          final primitives = filters.getAllById(filterId);
-          if (primitives.length == 1 &&
-              primitives.single is SvgDisplacementMapFilter) {
-            final primitive = primitives.single as SvgDisplacementMapFilter;
-            final textureSource = _resolveDisplacementBuiltInInput(
-              primitive.input,
-              defaultToSourceGraphic: true,
-            );
-            final mapSource = _resolveDisplacementBuiltInInput(
-              primitive.input2,
-              defaultToSourceGraphic: false,
-            );
-            if (textureSource != null &&
-                mapSource != null &&
-                textureSource != _DisplacementInputSource.href &&
-                mapSource != _DisplacementInputSource.href) {
-              final requestKey =
-                  '$filterId|${targetWidth}x$targetHeight|${textureSource.name}|${mapSource.name}|${node.id ?? node.tagName}';
-              if (seenRequestKeys.add(requestKey)) {
-                requests.add(
-                  _DisplacementImageRequest.sourceBased(
-                    filterId: filterId,
-                    targetWidth: targetWidth,
-                    targetHeight: targetHeight,
-                    sourceNode: node,
-                    textureSource: textureSource,
-                    mapSource: mapSource,
-                    displacementFilter: primitive,
-                  ),
-                );
-              }
-            }
-          }
-
           final passes = filters.resolvePaintPasses(filterId);
           if (passes.length == 1 &&
               passes.single is SvgDisplacementMapPaintPass) {
@@ -934,10 +932,10 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       }
 
       final targetWidth = request.isHrefBased
-          ? request.targetWidth
+          ? request.targetWidth!
           : textureImage.width;
       final targetHeight = request.isHrefBased
-          ? request.targetHeight
+          ? request.targetHeight!
           : textureImage.height;
 
       var textureInput = textureImage;
@@ -1093,7 +1091,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       hasAnimations: _hasAnimations,
     );
 
-    final nodeBounds = painter.measureNodeBounds(node);
+    final nodeBounds = painter.measureFilterTargetBounds(node);
     if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
       return null;
     }
@@ -1119,7 +1117,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     AnimatedSvgPainter painter,
     SvgNode node,
   ) {
-    final localBounds = painter.measureNodeBounds(node);
+    final localBounds = painter.measureFilterTargetBounds(node);
     if (localBounds.width <= 0 || localBounds.height <= 0) {
       return localBounds;
     }
@@ -1667,18 +1665,18 @@ class _DisplacementImageRequest {
 
   const _DisplacementImageRequest.sourceBased({
     required this.filterId,
-    required this.targetWidth,
-    required this.targetHeight,
     required this.sourceNode,
     required this.textureSource,
     required this.mapSource,
     required this.displacementFilter,
-  }) : textureHref = null,
+  }) : targetWidth = null,
+       targetHeight = null,
+       textureHref = null,
        mapHref = null;
 
   final String filterId;
-  final int targetWidth;
-  final int targetHeight;
+  final int? targetWidth;
+  final int? targetHeight;
   final String? textureHref;
   final String? mapHref;
   final SvgNode? sourceNode;
