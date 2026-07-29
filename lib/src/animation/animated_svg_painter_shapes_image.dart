@@ -167,11 +167,13 @@ extension AnimatedSvgPainterShapesImageExtension on AnimatedSvgPainter {
     // Per SVG spec: if only one dimension is given, compute the other to
     // preserve aspect ratio. Falling back to raw pixel size causes the
     // viewport to mismatch and resolveSvgViewportLayout to shift the image.
-    final width = rawWidth ??
+    final width =
+        rawWidth ??
         (rawHeight != null && image.height > 0
             ? rawHeight * image.width / image.height
             : image.width.toDouble());
-    final height = rawHeight ??
+    final height =
+        rawHeight ??
         (rawWidth != null && image.width > 0
             ? rawWidth * image.height / image.width
             : image.height.toDouble());
