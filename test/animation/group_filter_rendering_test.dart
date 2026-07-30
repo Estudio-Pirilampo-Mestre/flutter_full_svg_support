@@ -33,8 +33,10 @@ Future<Uint8List> _renderSvgPixels(
   if (waitForAsyncFilterImages) {
     // Source-based displacement and lighting filters rasterize asynchronously.
     // Alternate real time with frames so the completed precompute can schedule
-    // and render its repaint.
-    for (var i = 0; i < 3; i++) {
+    // and render its repaint. Each request's rasterize/decode chain can take
+    // several rounds, so shared-filter tests need enough iterations for every
+    // variant to land.
+    for (var i = 0; i < 10; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)),
       );
@@ -1466,4 +1468,100 @@ void main() {
     expect(centerPixel[0], isNot(closeTo(0xE4, 2)));
     expect(centerPixel[3], greaterThan(0));
   });
+
+  for (final withIds in <bool>[false, true]) {
+    testWidgets(
+      'source displacement precompute keeps shared-filter targets distinct '
+      '${withIds ? 'with IDs' : 'without IDs'}',
+      (tester) async {
+        final firstId = withIds ? ' id="first"' : '';
+        final secondId = withIds ? ' id="second"' : '';
+        final svg =
+            '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="1"/>
+    </filter>
+  </defs>
+  <rect$firstId width="16" height="32" fill="#FF0000"
+      filter="url(#sharedDisplacement)"/>
+  <rect$secondId x="16" width="16" height="32" fill="#0000FF"
+      filter="url(#sharedDisplacement)"/>
+</svg>''';
+
+        final pixels = await _renderSvgPixels(
+          tester,
+          svg,
+          waitForAsyncFilterImages: true,
+        );
+        final first = _pixelAt(pixels, 8, 16);
+        final second = _pixelAt(pixels, 24, 16);
+
+        expect(first[0], greaterThan(200));
+        expect(first[2], lessThan(40));
+        expect(first[3], greaterThan(0));
+        expect(second[0], lessThan(40));
+        expect(second[2], greaterThan(200));
+        expect(second[3], greaterThan(0));
+      },
+    );
+  }
+
+  for (final withIds in <bool>[false, true]) {
+    testWidgets(
+      'source lighting precompute keeps shared-filter targets distinct '
+      '${withIds ? 'with IDs' : 'without IDs'}',
+      (tester) async {
+        final firstId = withIds ? ' id="first"' : '';
+        final secondId = withIds ? ' id="second"' : '';
+        final svg =
+            '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedLighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+  </defs>
+  <rect$firstId width="16" height="32" fill="#E4DCEA"
+      filter="url(#sharedLighting)"/>
+  <ellipse$secondId cx="24" cy="16" rx="8" ry="16" fill="#E4DCEA"
+      filter="url(#sharedLighting)"/>
+</svg>''';
+
+        final pixels = await _renderSvgPixels(
+          tester,
+          svg,
+          waitForAsyncFilterImages: true,
+        );
+        final rectNearEdge = _pixelAt(pixels, 2, 8);
+        final rectCenter = _pixelAt(pixels, 8, 16);
+        final ellipseNearEdge = _pixelAt(pixels, 18, 8);
+        final ellipseCenter = _pixelAt(pixels, 24, 16);
+
+        // Both targets have a 16x32 bounding box, so a cache keyed only by
+        // filter id and output size would hand the ellipse's variant to the
+        // rect. The rect's alpha is flat, so its lit surface is uniform; the
+        // ellipse's curved alpha edge shades its near-edge pixels. If the
+        // rect shows edge shading, the variants were mixed up.
+        expect(
+          (rectNearEdge[1] - rectCenter[1]).abs(),
+          lessThan(10),
+          reason: 'rect surface must stay uniform (no ellipse edge shading)',
+        );
+        expect(
+          ellipseNearEdge[1],
+          greaterThan(ellipseCenter[1] + 20),
+          reason: 'ellipse variant must retain its curved-edge shading',
+        );
+      },
+    );
+  }
 }

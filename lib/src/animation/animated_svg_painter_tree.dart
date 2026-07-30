@@ -195,6 +195,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -212,6 +213,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -229,6 +231,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -246,6 +249,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -263,6 +267,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -280,6 +285,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -297,6 +303,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -314,6 +321,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -332,6 +340,7 @@ void _paintNodeContent(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
+          targetNode: node,
           targetNodeBounds: filterState.targetBounds,
           filterRegionClip: filterState.regionClip,
           requiresFilterExecution: filterState.requiresFilterExecution,
@@ -566,6 +575,7 @@ bool _paintGroupWithOpacity(
       canvas,
       filterPasses,
       _FilterRenderTarget(
+        targetNode: node,
         bounds: targetNodeBounds,
         filterRegionClip: filterRegionClip,
         paintSource: paintGroupFilterSource,
@@ -595,6 +605,7 @@ bool _paintLightingPassImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
   SvgFilterPaintPass pass, {
+  required SvgNode targetNode,
   required ui.Rect targetNodeBounds,
   ui.Rect? filterRegionClip,
 }) {
@@ -623,7 +634,7 @@ bool _paintLightingPassImpl(
     return false;
   }
 
-  final key = '$filterId|${width}x$height|$kind';
+  final key = '$filterId|${width}x$height|$kind|${targetNode.documentPathKey}';
   final image = painter.lightingImagesByFilterKey[key];
   if (image == null) {
     return false;
@@ -1172,12 +1183,14 @@ typedef _FilterSourcePainter =
 class _FilterRenderTarget {
   const _FilterRenderTarget({
     required this.paintSource,
+    required this.targetNode,
     this.bounds,
     this.filterRegionClip,
     this.isImageNode = false,
   });
 
   final _FilterSourcePainter paintSource;
+  final SvgNode targetNode;
   final ui.Rect? bounds;
   final ui.Rect? filterRegionClip;
   final bool isImageNode;
@@ -1231,6 +1244,7 @@ void _paintWithFilterPassesImpl(
     ui.BlendMode? blendMode,
   )
   paint, {
+  required SvgNode targetNode,
   ui.Rect? targetNodeBounds,
   ui.Rect? filterRegionClip,
   bool requiresFilterExecution = false,
@@ -1250,6 +1264,7 @@ void _paintWithFilterPassesImpl(
     canvas,
     passes,
     _FilterRenderTarget(
+      targetNode: targetNode,
       bounds: targetNodeBounds,
       filterRegionClip: filterRegionClip,
       isImageNode: isImageNode,
@@ -1288,6 +1303,7 @@ void _executeFilterPassesImpl(
             painter,
             canvas,
             pass,
+            targetNode: target.targetNode,
             targetNodeBounds: target.bounds!,
             filterRegionClip: target.filterRegionClip,
           );
@@ -1333,6 +1349,7 @@ void _executeFilterPassesImpl(
             painter,
             canvas,
             pass,
+            targetNode: target.targetNode,
             targetNodeBounds: target.bounds!,
             filterRegionClip: target.filterRegionClip,
           );
@@ -1413,6 +1430,7 @@ bool _paintDisplacementPassImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
   SvgDisplacementMapPaintPass pass, {
+  required SvgNode targetNode,
   required ui.Rect targetNodeBounds,
   ui.Rect? filterRegionClip,
 }) {
@@ -1427,7 +1445,9 @@ bool _paintDisplacementPassImpl(
     return false;
   }
 
-  final key = '${pass.displacementFilter.id}|${width}x$height';
+  final key = pass.textureHref == null && pass.mapHref == null
+      ? '${pass.displacementFilter.id}|${width}x$height|${targetNode.documentPathKey}'
+      : '${pass.displacementFilter.id}|${width}x$height';
   final image = painter.displacementImagesByFilterKey[key];
   if (image == null) {
     return false;

@@ -246,6 +246,7 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
       canvas,
       filterState.passes,
       paintReferencedContent,
+      targetNode: node,
       targetNodeBounds: filterState.targetBounds,
       filterRegionClip: filterState.regionClip,
       requiresFilterExecution: filterState.requiresFilterExecution,
