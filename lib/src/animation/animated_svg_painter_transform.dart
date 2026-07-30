@@ -1012,7 +1012,8 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         try {
           final referenced = document.root.findById(hrefId);
           if (referenced == null ||
-              !_isUseReferenceAllowedTag(referenced.tagName)) {
+              !_isUseReferenceAllowedTag(referenced.tagName) ||
+              !_contributesToFilterBounds(referenced)) {
             return ui.Rect.zero;
           }
           // Per SVG 1.1 §5.6, use→symbol and use→svg establish a viewport
@@ -1103,7 +1104,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         // contributes geometry, mapped into the switch coordinate system
         // like any other child of a container.
         final activeChild = resolveActiveSwitchChild(node);
-        if (activeChild == null) {
+        if (activeChild == null || !_contributesToFilterBounds(activeChild)) {
           return ui.Rect.zero;
         }
         final childBounds = _resolveFilterTargetBounds(activeChild, useGuard);

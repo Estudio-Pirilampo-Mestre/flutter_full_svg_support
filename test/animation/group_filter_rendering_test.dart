@@ -1469,6 +1469,58 @@ void main() {
     expect(centerPixel[3], greaterThan(0));
   });
 
+  testWidgets('hidden use target does not contribute group filter bounds', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <rect id="hiddenTarget" width="32" height="32" display="none"/>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#hiddenTarget"/>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    // The use shadow tree has no SourceGraphic, so the objectBoundingBox
+    // filter must have no geometry on which to render turbulence.
+    expect(centerPixel[3], 0);
+  });
+
+  testWidgets(
+    'hidden selected switch child does not contribute filter bounds',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <switch>
+      <rect width="32" height="32" display="none"/>
+    </switch>
+  </g>
+</svg>''';
+
+      final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+      // Conditional selection is not enough: a selected non-rendered child
+      // still contributes no SourceGraphic or filter target geometry.
+      expect(centerPixel[3], 0);
+    },
+  );
+
   for (final withIds in <bool>[false, true]) {
     testWidgets(
       'source displacement precompute keeps shared-filter targets distinct '
