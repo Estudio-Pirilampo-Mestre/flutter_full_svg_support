@@ -634,7 +634,7 @@ bool _paintLightingPassImpl(
     return false;
   }
 
-  final key = '$filterId|${width}x$height|$kind|${targetNode.documentPathKey}';
+  final key = '$filterId|${width}x$height|$kind|${targetNode.nodeKey}';
   final image = painter.lightingImagesByFilterKey[key];
   if (image == null) {
     return false;
@@ -1446,7 +1446,7 @@ bool _paintDisplacementPassImpl(
   }
 
   final key = pass.textureHref == null && pass.mapHref == null
-      ? '${pass.displacementFilter.id}|${width}x$height|${targetNode.documentPathKey}'
+      ? '${pass.displacementFilter.id}|${width}x$height|${targetNode.nodeKey}'
       : '${pass.displacementFilter.id}|${width}x$height';
   final image = painter.displacementImagesByFilterKey[key];
   if (image == null) {

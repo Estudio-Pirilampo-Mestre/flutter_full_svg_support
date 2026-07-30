@@ -478,5 +478,33 @@ void main() {
       expect(group.hasAnimations, isTrue);
       expect(rect.hasAnimations, isTrue);
     });
+
+    test('nodeKey distinguishes same-tag siblings', () {
+      final root = SvgNode(tagName: 'svg');
+      final first = SvgNode(tagName: 'rect');
+      final second = SvgNode(tagName: 'rect');
+
+      root.addChild(first);
+      root.addChild(second);
+
+      expect(first.nodeKey, isNot(equals(second.nodeKey)));
+    });
+
+    test('nodeKey survives use-style parent remapping', () {
+      final defs = SvgNode(tagName: 'defs');
+      final referenced = SvgNode(tagName: 'rect');
+      defs.addChild(referenced);
+      final use = SvgNode(tagName: 'use');
+
+      final keyBefore = referenced.nodeKey;
+      // Mirror the use render path: temporarily hang the referenced node
+      // under the use element for inheritance, then restore.
+      referenced.parent = use;
+      final keyDuring = referenced.nodeKey;
+      referenced.parent = defs;
+
+      expect(keyDuring, equals(keyBefore));
+      expect(referenced.nodeKey, equals(keyBefore));
+    });
   });
 }

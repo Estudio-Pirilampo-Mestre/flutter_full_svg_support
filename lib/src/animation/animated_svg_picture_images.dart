@@ -276,7 +276,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
         final passes = filters.resolvePaintPasses(filterId);
         for (final pass in passes) {
           if (pass is SvgDiffuseLightingPaintPass) {
-            final requestKey = '$filterId|diffuse|${node.documentPathKey}';
+            final requestKey = '$filterId|diffuse|${node.nodeKey}';
             if (seenRequestKeys.add(requestKey)) {
               requests.add(
                 _LightingImageRequest.sourceDiffuse(
@@ -287,7 +287,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
               );
             }
           } else if (pass is SvgSpecularLightingPaintPass) {
-            final requestKey = '$filterId|specular|${node.documentPathKey}';
+            final requestKey = '$filterId|specular|${node.nodeKey}';
             if (seenRequestKeys.add(requestKey)) {
               requests.add(
                 _LightingImageRequest.sourceSpecular(
@@ -339,7 +339,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
               textureSource != _DisplacementInputSource.href &&
               mapSource != _DisplacementInputSource.href) {
             final requestKey =
-                '$filterId|$textureSource.name|${mapSource.name}|${node.documentPathKey}';
+                '$filterId|$textureSource.name|${mapSource.name}|${node.nodeKey}';
             if (seenRequestKeys.add(requestKey)) {
               requests.add(
                 _DisplacementImageRequest.sourceBased(
@@ -832,7 +832,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       }
 
       final key =
-          '${request.filterId}|${outputImage.width}x${outputImage.height}|${request.kindName}|${sourceNode.documentPathKey}';
+          '${request.filterId}|${outputImage.width}x${outputImage.height}|${request.kindName}|${sourceNode.nodeKey}';
       final previous = _lightingImagesByFilterKey[key];
       if (!identical(previous, outputImage)) {
         previous?.dispose();
@@ -1018,7 +1018,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
 
       final key = request.isHrefBased
           ? '${request.filterId}|${displacedImage.width}x${displacedImage.height}'
-          : '${request.filterId}|${displacedImage.width}x${displacedImage.height}|${request.sourceNode!.documentPathKey}';
+          : '${request.filterId}|${displacedImage.width}x${displacedImage.height}|${request.sourceNode!.nodeKey}';
       final previous = _displacementImagesByFilterKey[key];
       if (!identical(previous, displacedImage)) {
         previous?.dispose();

@@ -120,6 +120,9 @@ class AnimatableSvgAttribute {
       'AnimatableSvgAttribute($name: ${_isAnimated ? _animatedValue : baseValue}, animated: $_isAnimated)';
 }
 
+/// Source of per-instance [SvgNode.nodeKey] values.
+int _nextNodeKey = 0;
+
 /// A node in the SVG DOM tree
 class SvgNode {
   /// Creates an SVG node
@@ -132,7 +135,8 @@ class SvgNode {
     this.parent,
   }) : attributes = attributes ?? {},
        children = children ?? [],
-       _rawAttributes = {};
+       _rawAttributes = {},
+       nodeKey = '#${_nextNodeKey++}';
 
   // === Accessibility Properties ===
 
@@ -193,30 +197,15 @@ class SvgNode {
     }
   }
 
-  /// Stable identity derived from this node's position in its SVG document.
+  /// Identity of this node instance, assigned at construction.
   ///
-  /// IDs are optional in SVG, so the DOM path distinguishes same-tag sibling
-  /// targets when filter precomputation needs a per-element cache entry. The
-  /// first resolved path is retained because rendering a `<use>` can
-  /// temporarily remap a referenced node's parent for inheritance.
-  String get documentPathKey => _documentPathKey ??= _computeDocumentPathKey();
-
-  String? _documentPathKey;
-
-  String _computeDocumentPathKey() {
-    final segments = <String>[];
-    SvgNode? current = this;
-    while (current != null) {
-      final parent = current.parent;
-      if (parent == null) {
-        segments.add('root');
-        break;
-      }
-      segments.add(parent.children.indexOf(current).toString());
-      current = parent;
-    }
-    return segments.reversed.join('/');
-  }
+  /// Filter precomputation caches rendered variants per target element, so
+  /// the key must distinguish same-tag siblings sharing one filter and stay
+  /// stable for the node's whole lifetime. A construction-time ordinal is
+  /// used instead of a DOM path: rendering a `<use>` temporarily remaps a
+  /// referenced node's parent for inheritance, and a path-derived identity
+  /// captured during that window would freeze the transient mapping.
+  final String nodeKey;
 
   /// Mark this node and all ancestors as having animations
   void _markHasAnimations() {
