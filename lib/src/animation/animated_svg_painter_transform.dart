@@ -947,7 +947,8 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   /// Resolves the bounds of the SourceGraphic used by a node-level filter.
   ///
   /// Leaf nodes use their own geometry bounds. Container nodes use the union
-  /// of their rendered descendants, expressed in the container's local
+  /// of descendant geometry that participates in the filter target's bounding
+  /// box, expressed in the container's local
   /// coordinate system. The node's own canvas transform is deliberately not
   /// included: callers resolve this after applying that transform.
   ///
@@ -1119,7 +1120,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     return _unionChildrenFilterBounds(node, useGuard);
   }
 
-  /// Unites the filter bounds of [node]'s rendered children, each mapped
+  /// Unites the filter bounds of [node]'s geometric children, each mapped
   /// into [node]'s local coordinate system.
   ui.Rect _unionChildrenFilterBounds(SvgNode node, Set<String>? useGuard) {
     ui.Rect? bounds;
@@ -1246,19 +1247,12 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
       return false;
     }
 
-    // visibility is inherited but overridable: a hidden container may still
-    // hold explicitly visible descendants. Traverse containers and let each
-    // geometry node decide against its own effective visibility.
-    if (_isFilterBoundsContainer(node) ||
-        node.tagName.toLowerCase() == 'symbol') {
-      return true;
-    }
-
-    final visibility = _getInheritedString(
-      node,
-      'visibility',
-    )?.trim().toLowerCase();
-    return visibility != 'hidden' && visibility != 'collapse';
+    // Unlike display:none, visibility:hidden/collapse does not remove an
+    // element from SVG bounding-box calculations. It only suppresses pixels
+    // in SourceGraphic, and visible descendants may override it. Keep all
+    // non-display:none geometry so objectBoundingBox filter regions remain
+    // correct; the paint path handles SourceGraphic visibility separately.
+    return true;
   }
 
   ui.Rect _mapChildBoundsToParent(SvgNode child, ui.Rect bounds) {

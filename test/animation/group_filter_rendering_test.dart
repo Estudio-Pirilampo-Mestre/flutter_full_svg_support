@@ -1605,10 +1605,10 @@ void main() {
     },
   );
 
-  testWidgets('hidden group without a visible override stays empty', (
-    tester,
-  ) async {
-    const svg = '''
+  testWidgets(
+    'hidden geometry still establishes the objectBoundingBox filter region',
+    (tester) async {
+      const svg = '''
 <svg width="32" height="32" viewBox="0 0 32 32"
     xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -1624,10 +1624,34 @@ void main() {
   </g>
 </svg>''';
 
+      final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+      // visibility:hidden suppresses SourceGraphic painting but not geometric
+      // bounds. feTurbulence can therefore paint within the non-zero filter
+      // region even though the source itself is transparent.
+      expect(centerPixel[3], greaterThan(0));
+    },
+  );
+
+  testWidgets('hidden geometry stays out of SourceGraphic', (tester) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sourceOnly" x="0" y="0" width="1" height="1">
+      <feMerge><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#sourceOnly)">
+    <g visibility="hidden">
+      <rect width="32" height="32" fill="#ff0000"/>
+    </g>
+  </g>
+</svg>''';
+
     final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
 
-    // Traversing hidden containers must not resurrect hidden geometry:
-    // without an explicit visible override nothing renders.
+    // Bounds inclusion must not make a hidden leaf paint into SourceGraphic.
     expect(centerPixel[3], 0);
   });
 
