@@ -1,3 +1,51 @@
+## 1.4.0
+
+### Complete group filters and geometry-accurate transform origins
+
+This minor release completes the filter pipeline for container elements,
+shares real SVG geometry bounds with bounding-box-based transforms, and adds a
+new multilingual public documentation set.
+
+**New**
+
+- Added complete public usage guides in English, Simplified Chinese, and Hindi,
+  plus dedicated migration, supported-features, and limitations documents.
+- Added focused pixel regressions for group filter composition and
+  `transform-box: fill-box` behavior across complex SVG geometry.
+
+**Changed**
+
+- Leaf elements and groups now use one ordered filter-pass executor, including
+  specialized turbulence, displacement, lighting, image, and inner-shadow
+  passes.
+- Filter sizing and bounding-box transform origins now share one fill-geometry
+  resolver for paths, polygons, polylines, text, containers, and referenced
+  `<use>` content, including `<symbol>`/`<svg>` viewport and `viewBox` mapping.
+- Source-based displacement and lighting precomputation now uses rendered
+  geometry instead of requiring explicit width and height attributes.
+
+**Fixed**
+
+- Group filters no longer drop ordinary passes around specialized passes.
+- `FillPaint` and `StrokePaint` channel restrictions remain isolated through
+  descendants and nested filters.
+- Groups combining filters with masks, opacity, or clipping now preserve the
+  correct compositing order.
+- Explicit identity filters still apply their declared filter-region clip.
+- `objectBoundingBox` filters now resolve real bounds for path, polygon,
+  polyline, text, switch, symbol, and use geometry, including transformed and
+  visibility-controlled descendants.
+- `transform-origin` with `transform-box: fill-box` now rotates and scales
+  paths, polygons, polylines, text, and positioned/referenced use elements
+  around their actual fill bounds instead of a zero-sized fallback.
+- Source-filter precompute caches now use stable per-node identities, avoiding
+  collisions between same-size elements that share a filter.
+
+**Maintenance**
+
+- Fixed the Android arm64 release workflow for current GitHub-hosted Ubuntu
+  runners by resolving `sdkmanager` through `ANDROID_SDK_ROOT`.
+
 ## 1.3.1
 
 **Fixed**

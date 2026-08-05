@@ -16,7 +16,7 @@ flutter pub add full_svg_flutter
 
 ```yaml
 dependencies:
-  full_svg_flutter: ^1.3.1
+  full_svg_flutter: ^1.4.0
 ```
 
 Dart file में import करें:
