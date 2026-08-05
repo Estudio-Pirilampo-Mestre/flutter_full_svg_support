@@ -64,6 +64,68 @@ void main() {
       expect(passes[1].offset, ui.Offset.zero);
     });
 
+    test('feMerge preserves repeated SourceGraphic entries', () {
+      final svgString = '''
+<svg viewBox="0 0 32 32">
+  <defs>
+    <filter id="repeatedSourceGraphicFx">
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="32" height="32" fill="#204060"/>
+</svg>
+''';
+
+      final document = SvgParser.parse(svgString);
+      final passes = document.filters!.resolvePaintPasses(
+        'repeatedSourceGraphicFx',
+      );
+
+      expect(passes, hasLength(2));
+      for (final pass in passes) {
+        expect(pass.runtimeType, SvgFilterPaintPass);
+        expect(pass.imageFilter, isNull);
+        expect(pass.colorFilter, isNull);
+        expect(pass.blendMode, isNull);
+        expect(pass.offset, ui.Offset.zero);
+        expect(pass.paintFill, isTrue);
+        expect(pass.paintStroke, isTrue);
+      }
+    });
+
+    test(
+      'feMerge keeps ordinary and turbulence passes in declaration order',
+      () {
+        final svgString = '''
+<svg viewBox="0 0 32 32">
+  <defs>
+    <filter id="mixedPassOrderFx">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19" result="noise"/>
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="noise"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="32" height="32" fill="#E4DCEA"/>
+</svg>
+''';
+
+        final document = SvgParser.parse(svgString);
+        final passes = document.filters!.resolvePaintPasses('mixedPassOrderFx');
+
+        expect(passes, hasLength(3));
+        expect(passes[0].runtimeType, SvgFilterPaintPass);
+        expect(passes[1], isA<SvgTurbulencePaintPass>());
+        expect(passes[2].runtimeType, SvgFilterPaintPass);
+      },
+    );
+
     test('Default in resolution (omitted = previous output)', () {
       final svgString = '''
 <svg viewBox="0 0 100 100">

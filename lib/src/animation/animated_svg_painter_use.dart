@@ -105,6 +105,7 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
     ui.Canvas canvas,
     SvgNode node, {
     required Set<String> useStack,
+    required _ResolvedNodeFilterState filterState,
     _UseInheritanceContext? useContext,
   }) {
     final hrefId = _extractHrefId(node);
@@ -178,19 +179,6 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
         ..color = ui.Color.fromARGB((opacity * 255).round(), 255, 255, 255);
       canvas.saveLayer(null, layerPaint);
     }
-    final filterPasses = _resolveFilterPassesImpl(this, node);
-    final nodeBoundsForFilterPasses = _getNodeBounds(node);
-
-    ui.Rect? filterRegionClip;
-    final filterId = _getFilterId(node);
-    if (filterId != null && document.filters != null) {
-      final region = document.filters!.getFilterRegion(filterId);
-      if (nodeBoundsForFilterPasses.width > 0 &&
-          nodeBoundsForFilterPasses.height > 0) {
-        filterRegionClip = region.computeRect(nodeBoundsForFilterPasses);
-      }
-    }
-
     void paintReferencedContent(
       ui.ImageFilter? imageFilter,
       ui.ColorFilter? colorFilter,
@@ -253,18 +241,16 @@ extension AnimatedSvgPainterUseExtension on AnimatedSvgPainter {
       }
     }
 
-    if (_isIdentityOnlyFilterPasses(filterPasses)) {
-      paintReferencedContent(null, null, null);
-    } else {
-      _paintWithFilterPassesImpl(
-        this,
-        canvas,
-        filterPasses,
-        paintReferencedContent,
-        targetNodeBounds: nodeBoundsForFilterPasses,
-        filterRegionClip: filterRegionClip,
-      );
-    }
+    _paintWithFilterPassesImpl(
+      this,
+      canvas,
+      filterState.passes,
+      paintReferencedContent,
+      targetNode: node,
+      targetNodeBounds: filterState.targetBounds,
+      filterRegionClip: filterState.regionClip,
+      requiresFilterExecution: filterState.requiresFilterExecution,
+    );
 
     if (opacity < 1.0) {
       canvas.restore();

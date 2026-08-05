@@ -944,6 +944,444 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     }
   }
 
+  /// Resolves the bounds of the SourceGraphic used by a node-level filter.
+  ///
+  /// Leaf nodes use their own geometry bounds. Container nodes use the union
+  /// of descendant geometry that participates in the filter target's bounding
+  /// box, expressed in the container's local
+  /// coordinate system. The node's own canvas transform is deliberately not
+  /// included: callers resolve this after applying that transform.
+  ///
+  /// Viewport-relative rect geometry and geometry types that [_getNodeBounds]
+  /// cannot size (path, polygon, polyline, use) are resolved here so that
+  /// transform-origin bounds keep their existing behavior. [useGuard] tracks
+  /// visited reference ids to break circular `use` chains.
+  ui.Rect _resolveFilterTargetBounds(SvgNode node, [Set<String>? useGuard]) {
+    switch (node.tagName) {
+      case 'rect':
+        final x =
+            _getLengthWithViewportSupport(node, 'x', isHorizontal: true) ?? 0.0;
+        final y =
+            _getLengthWithViewportSupport(node, 'y', isHorizontal: false) ??
+            0.0;
+        final width =
+            _getLengthWithViewportSupport(node, 'width', isHorizontal: true) ??
+            0.0;
+        final height =
+            _getLengthWithViewportSupport(
+              node,
+              'height',
+              isHorizontal: false,
+            ) ??
+            0.0;
+        return ui.Rect.fromLTWH(x, y, width, height);
+      case 'path':
+        final pathData = node.getAttributeValue('d')?.toString();
+        if (pathData == null || pathData.isEmpty) {
+          return ui.Rect.zero;
+        }
+        return _buildPath(pathData)?.getBounds() ?? ui.Rect.zero;
+      case 'polygon':
+      case 'polyline':
+        final points = _parsePoints(node);
+        if (points.length < 2) {
+          return ui.Rect.zero;
+        }
+        var minX = points.first.dx;
+        var minY = points.first.dy;
+        var maxX = minX;
+        var maxY = minY;
+        for (final point in points) {
+          minX = minX < point.dx ? minX : point.dx;
+          minY = minY < point.dy ? minY : point.dy;
+          maxX = maxX > point.dx ? maxX : point.dx;
+          maxY = maxY > point.dy ? maxY : point.dy;
+        }
+        return ui.Rect.fromLTRB(minX, minY, maxX, maxY);
+      case 'use':
+        final hrefId = _extractHrefId(node);
+        if (hrefId == null || hrefId.isEmpty) {
+          return ui.Rect.zero;
+        }
+        final guard = useGuard ?? <String>{};
+        if (!guard.add(hrefId)) {
+          return ui.Rect.zero;
+        }
+        // The guard is reference-chain scoped: remove the id when the
+        // recursion returns so sibling uses of the same target are not
+        // mistaken for circular references.
+        try {
+          final referenced = document.root.findById(hrefId);
+          if (referenced == null ||
+              !_isUseReferenceAllowedTag(referenced.tagName) ||
+              !_contributesToFilterBounds(referenced)) {
+            return ui.Rect.zero;
+          }
+          // Per SVG 1.1 §5.6, use→symbol and use→svg establish a viewport
+          // sized by the use element's width/height. Bounds come from the
+          // referenced content, mapped through the same viewBox→viewport
+          // transform the renderer applies, and clipped to the viewport
+          // when the renderer clips. The use x/y translation is applied
+          // later by _mapChildBoundsToParent.
+          if (referenced.tagName == 'symbol' || referenced.tagName == 'svg') {
+            var contentBounds = _unionChildrenFilterBounds(referenced, guard);
+            if (contentBounds.width <= 0 || contentBounds.height <= 0) {
+              return ui.Rect.zero;
+            }
+            // A referenced <svg> is painted as a normal node after the use
+            // viewport mapping (_paintSvgUseReference). Reuse the same
+            // transform chain as ordinary nested SVG children: its transform,
+            // x/y translation, and own viewBox-to-viewport mapping. A
+            // referenced <symbol> is painted child-by-child
+            // (_paintSymbolReference), so it must not get this mapping.
+            if (referenced.tagName == 'svg') {
+              contentBounds = _mapChildBoundsToParent(
+                referenced,
+                contentBounds,
+              );
+            }
+            final viewportTransform = _resolveUseViewportTransform(
+              useNode: node,
+              referenceNode: referenced,
+            );
+            if (viewportTransform == null) {
+              // No viewBox (or no explicit viewport size): the content is
+              // rendered unscaled in the use coordinate system, but the
+              // renderer still clips it (unless overflow:visible) — to the
+              // use width/height, or to the viewBox when those are absent
+              // (_applySymbolOverflowClipping). Mirror that clip.
+              final overflow = _getInheritedString(
+                referenced,
+                'overflow',
+              )?.toLowerCase();
+              if (overflow == 'visible') {
+                return contentBounds;
+              }
+              final useWidth = _getNumber(node, 'width');
+              final useHeight = _getNumber(node, 'height');
+              ui.Rect? rendererClip;
+              if (useWidth != null &&
+                  useHeight != null &&
+                  useWidth > 0 &&
+                  useHeight > 0) {
+                rendererClip = ui.Rect.fromLTWH(0, 0, useWidth, useHeight);
+              } else {
+                final viewBox = _parseViewBox(
+                  _getString(referenced, 'viewBox'),
+                );
+                if (viewBox != null &&
+                    viewBox.width > 0 &&
+                    viewBox.height > 0) {
+                  rendererClip = viewBox;
+                }
+              }
+              return rendererClip == null
+                  ? contentBounds
+                  : contentBounds.intersect(rendererClip);
+            }
+            var mapped = _transformRect(
+              Matrix4x4(Float64List.fromList(viewportTransform.matrix.storage)),
+              contentBounds,
+            );
+            final clipRect = viewportTransform.clipRect;
+            if (clipRect != null) {
+              mapped = mapped.intersect(clipRect);
+            }
+            return mapped;
+          }
+          // Other referenced elements are cloned with their own transform
+          // into the use shadow tree, so map the referenced root's paint
+          // transform like the render path does.
+          final referencedBounds = _resolveFilterTargetBounds(
+            referenced,
+            guard,
+          );
+          return _mapChildBoundsToParent(referenced, referencedBounds);
+        } finally {
+          guard.remove(hrefId);
+        }
+      case 'switch':
+        // Mirror the render path: only the conditionally selected child
+        // contributes geometry, mapped into the switch coordinate system
+        // like any other child of a container.
+        final activeChild = resolveActiveSwitchChild(node);
+        if (activeChild == null || !_contributesToFilterBounds(activeChild)) {
+          return ui.Rect.zero;
+        }
+        final childBounds = _resolveFilterTargetBounds(activeChild, useGuard);
+        return _mapChildBoundsToParent(activeChild, childBounds);
+      case 'text':
+        return _resolveTextFilterBounds(node);
+    }
+    if (!_isFilterBoundsContainer(node)) {
+      return _getNodeBounds(node);
+    }
+
+    return _unionChildrenFilterBounds(node, useGuard);
+  }
+
+  /// Unites the filter bounds of [node]'s geometric children, each mapped
+  /// into [node]'s local coordinate system.
+  ui.Rect _unionChildrenFilterBounds(SvgNode node, Set<String>? useGuard) {
+    ui.Rect? bounds;
+    for (final child in node.children) {
+      if (!_contributesToFilterBounds(child)) {
+        continue;
+      }
+
+      final childBounds = _resolveFilterTargetBounds(child, useGuard);
+      if (childBounds.width <= 0 || childBounds.height <= 0) {
+        continue;
+      }
+
+      final mappedBounds = _mapChildBoundsToParent(child, childBounds);
+      bounds = bounds == null
+          ? mappedBounds
+          : bounds.expandToInclude(mappedBounds);
+    }
+
+    return bounds ?? ui.Rect.zero;
+  }
+
+  /// Geometric bounds of a text node for filter target bounds.
+  ///
+  /// Runs the real text paint pipeline on a throwaway recorder canvas and
+  /// unions the exact chunk and glyph boxes the renderer computes, so
+  /// tspan x/y/dx/dy positioning, text anchors, textLength, and bidi are
+  /// honored without duplicating text layout semantics. Per-glyph scale and
+  /// rotate contribute transformed glyph boxes. Text-path subtrees use
+  /// [_approximateTextFilterBounds].
+  ui.Rect _resolveTextFilterBounds(SvgNode node) {
+    if (_hasTextPathDescendant(node)) {
+      return _approximateTextFilterBounds(node);
+    }
+    final pictureRecorder = ui.PictureRecorder();
+    ui.Rect? bounds;
+    try {
+      final recordingCanvas = ui.Canvas(pictureRecorder);
+      _paintText(
+        recordingCanvas,
+        node,
+        boundsRecorder: (rect) {
+          bounds = bounds == null ? rect : bounds!.expandToInclude(rect);
+        },
+      );
+    } finally {
+      pictureRecorder.endRecording().dispose();
+    }
+    return bounds ?? ui.Rect.zero;
+  }
+
+  bool _hasTextPathDescendant(SvgNode node) {
+    for (final child in node.children) {
+      if (child.tagName == 'textPath' || _hasTextPathDescendant(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Approximate geometric bounds of a text node for filter target bounds.
+  ///
+  /// Used as the textPath fallback. Measures the concatenated text content
+  /// as a single paragraph at the first x/y position. It intentionally
+  /// ignores tspan-relative offsets and per-glyph positioning.
+  ui.Rect _approximateTextFilterBounds(SvgNode node) {
+    final content = _collectTextContent(node).trim();
+    if (content.isEmpty) {
+      return ui.Rect.zero;
+    }
+    final fontSize = _getInheritedNumber(node, 'font-size') ?? 16.0;
+    if (fontSize <= 0) {
+      return ui.Rect.zero;
+    }
+    final x = _getNumber(node, 'x') ?? 0.0;
+    final y = _getNumber(node, 'y') ?? 0.0;
+    final fontFamily = _getInheritedString(node, 'font-family');
+
+    final builder = ui.ParagraphBuilder(
+      ui.ParagraphStyle(fontSize: fontSize, fontFamily: fontFamily),
+    )..addText(content);
+    final paragraph = builder.build()
+      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final width = paragraph.maxIntrinsicWidth;
+    final top = y - paragraph.alphabeticBaseline;
+    final height = paragraph.height;
+    paragraph.dispose();
+    if (width <= 0 || height <= 0) {
+      return ui.Rect.zero;
+    }
+
+    final anchor = _getStyleOrAttributeValue(
+      node,
+      'text-anchor',
+    )?.toString().trim().toLowerCase();
+    final left = switch (anchor) {
+      'middle' => x - width / 2,
+      'end' => x - width,
+      _ => x,
+    };
+    return ui.Rect.fromLTWH(left, top, width, height);
+  }
+
+  bool _isFilterBoundsContainer(SvgNode node) {
+    switch (node.tagName.toLowerCase()) {
+      case 'a':
+      case 'g':
+      case 'svg':
+      case 'foreignobject':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _contributesToFilterBounds(SvgNode node) {
+    // display:none suppresses the entire subtree; descendants cannot
+    // override it, so it gates containers and geometry alike.
+    final display = _getStyleOrAttributeValue(
+      node,
+      'display',
+    )?.toString().trim().toLowerCase();
+    if (display == 'none') {
+      return false;
+    }
+
+    // Unlike display:none, visibility:hidden/collapse does not remove an
+    // element from SVG bounding-box calculations. It only suppresses pixels
+    // in SourceGraphic, and visible descendants may override it. Keep all
+    // non-display:none geometry so objectBoundingBox filter regions remain
+    // correct; the paint path handles SourceGraphic visibility separately.
+    return true;
+  }
+
+  ui.Rect _mapChildBoundsToParent(SvgNode child, ui.Rect bounds) {
+    var transform = _resolveNodePaintTransform(child);
+
+    if (child.tagName == 'foreignObject') {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
+    } else if (child.tagName == 'svg' && !identical(child, document.root)) {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
+      final viewportTransform = _computeSingleViewportTransform(child);
+      if (viewportTransform != null) {
+        transform =
+            transform *
+            Matrix4x4(Float64List.fromList(viewportTransform.storage));
+      }
+    } else if (child.tagName == 'use') {
+      transform =
+          transform *
+          Matrix4x4.translation(
+            _getNumber(child, 'x') ?? 0.0,
+            _getNumber(child, 'y') ?? 0.0,
+            0,
+          );
+    }
+
+    return _transformRect(transform, bounds);
+  }
+
+  Matrix4x4 _resolveNodePaintTransform(SvgNode node) {
+    var matrix = Matrix4x4.identity();
+
+    final rawOffsetPath = _getStyleOrAttributeValue(
+      node,
+      'offset-path',
+    )?.toString();
+    if (rawOffsetPath != null && rawOffsetPath.trim().isNotEmpty) {
+      final motionPath = _resolveMotionPath(node, rawOffsetPath);
+      if (motionPath != null && motionPath.totalLength > 0) {
+        var progress = _resolveOffsetDistanceProgress(
+          _getStyleOrAttributeValue(node, 'offset-distance')?.toString(),
+          motionPath,
+        );
+        if (!progress.isFinite) {
+          progress = 0.0;
+        }
+        final point = motionPath.getPointAtTime(progress.clamp(0.0, 1.0));
+        matrix =
+            matrix *
+            Matrix4x4.translation(point.position.dx, point.position.dy, 0);
+        final rotation = _resolveOffsetRotateRadians(
+          _getStyleOrAttributeValue(node, 'offset-rotate')?.toString(),
+          point,
+        );
+        if (rotation.isFinite && rotation != 0.0) {
+          matrix = matrix * Matrix4x4.rotationZ(rotation);
+        }
+      }
+    }
+
+    final svgTransform = _getString(node, 'transform');
+    final cssTransform = _getStyleOrAttributeValue(
+      node,
+      'transform',
+    )?.toString();
+    final transformString = cssTransform ?? svgTransform;
+    if (transformString == null ||
+        transformString.isEmpty ||
+        transformString.toLowerCase() == 'none') {
+      return matrix;
+    }
+
+    final origin = _parseTransformOrigin(node);
+    if (origin != null && (origin.dx != 0 || origin.dy != 0)) {
+      matrix = matrix * Matrix4x4.translation(origin.dx, origin.dy, 0);
+    }
+
+    for (final transform in SvgTransform.parse(transformString)) {
+      matrix = matrix * _createMatrix4x4(transform);
+    }
+
+    if (origin != null && (origin.dx != 0 || origin.dy != 0)) {
+      matrix = matrix * Matrix4x4.translation(-origin.dx, -origin.dy, 0);
+    }
+
+    return matrix;
+  }
+
+  ui.Rect _transformRect(Matrix4x4 transform, ui.Rect rect) {
+    final topLeft = transform.transform2D(rect.left, rect.top, 0);
+    final topRight = transform.transform2D(rect.right, rect.top, 0);
+    final bottomLeft = transform.transform2D(rect.left, rect.bottom, 0);
+    final bottomRight = transform.transform2D(rect.right, rect.bottom, 0);
+
+    return ui.Rect.fromPoints(
+      ui.Offset(
+        math.min(
+          math.min(topLeft.dx, topRight.dx),
+          math.min(bottomLeft.dx, bottomRight.dx),
+        ),
+        math.min(
+          math.min(topLeft.dy, topRight.dy),
+          math.min(bottomLeft.dy, bottomRight.dy),
+        ),
+      ),
+      ui.Offset(
+        math.max(
+          math.max(topLeft.dx, topRight.dx),
+          math.max(bottomLeft.dx, bottomRight.dx),
+        ),
+        math.max(
+          math.max(topLeft.dy, topRight.dy),
+          math.max(bottomLeft.dy, bottomRight.dy),
+        ),
+      ),
+    );
+  }
+
   /// Gets the viewBox for a node if available.
   ui.Rect? _getViewBox(SvgNode node) {
     final viewBoxStr = _getString(node, 'viewBox');

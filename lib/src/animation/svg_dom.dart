@@ -120,6 +120,9 @@ class AnimatableSvgAttribute {
       'AnimatableSvgAttribute($name: ${_isAnimated ? _animatedValue : baseValue}, animated: $_isAnimated)';
 }
 
+/// Source of per-instance [SvgNode.nodeKey] values.
+int _nextNodeKey = 0;
+
 /// A node in the SVG DOM tree
 class SvgNode {
   /// Creates an SVG node
@@ -132,7 +135,8 @@ class SvgNode {
     this.parent,
   }) : attributes = attributes ?? {},
        children = children ?? [],
-       _rawAttributes = {};
+       _rawAttributes = {},
+       nodeKey = '#${_nextNodeKey++}';
 
   // === Accessibility Properties ===
 
@@ -192,6 +196,16 @@ class SvgNode {
       _markHasAnimations();
     }
   }
+
+  /// Identity of this node instance, assigned at construction.
+  ///
+  /// Filter precomputation caches rendered variants per target element, so
+  /// the key must distinguish same-tag siblings sharing one filter and stay
+  /// stable for the node's whole lifetime. A construction-time ordinal is
+  /// used instead of a DOM path: rendering a `<use>` temporarily remaps a
+  /// referenced node's parent for inheritance, and a path-derived identity
+  /// captured during that window would freeze the transient mapping.
+  final String nodeKey;
 
   /// Mark this node and all ancestors as having animations
   void _markHasAnimations() {

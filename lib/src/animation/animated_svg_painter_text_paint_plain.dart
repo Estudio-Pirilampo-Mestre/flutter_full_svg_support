@@ -15,6 +15,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final isVertical = style.writingMode != _SvgWritingMode.horizontalTb;
     if (isVertical) {
@@ -30,6 +31,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
         imageFilter: imageFilter,
         colorFilter: colorFilter,
         blendMode: blendMode,
+        boundsRecorder: boundsRecorder,
       );
     }
 
@@ -145,11 +147,32 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
         paintOrder.isNotEmpty &&
         paintOrder.startsWith('stroke');
 
+    final hasHorizontalScale = (scaleX - 1.0).abs() > 1e-6;
+
     ui.Rect paragraphBoundsAt(double x) => ui.Rect.fromLTWH(
       x,
       drawY,
       paragraph.maxIntrinsicWidth,
       paragraph.height,
+    );
+
+    ui.Rect paragraphPaintBoundsAt(double x) {
+      final bounds = paragraphBoundsAt(x);
+      if (!hasHorizontalScale) {
+        return bounds;
+      }
+      return ui.Rect.fromLTWH(
+        drawX + bounds.left * scaleX,
+        bounds.top,
+        bounds.width * scaleX,
+        bounds.height,
+      );
+    }
+
+    // Report the exact bounds this chunk will occupy. Used by filter target
+    // bounds resolution running the pipeline in recording mode.
+    boundsRecorder?.call(
+      paragraphPaintBoundsAt(hasHorizontalScale ? 0.0 : drawX),
     );
 
     ui.Rect strokeParagraphBoundsAt(double x) => ui.Rect.fromLTWH(
@@ -200,7 +223,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
         return true;
       }
 
-      if ((scaleX - 1.0).abs() > 1e-6) {
+      if (hasHorizontalScale) {
         canvas.save();
         canvas.translate(drawX, 0.0);
         canvas.scale(scaleX, 1.0);
@@ -259,7 +282,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
         return true;
       }
 
-      if ((scaleX - 1.0).abs() > 1e-6) {
+      if (hasHorizontalScale) {
         canvas.save();
         canvas.translate(drawX, 0.0);
         canvas.scale(scaleX, 1.0);
@@ -299,6 +322,7 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     final glyphs = text.runes.map((r) => String.fromCharCode(r)).toList();
     if (glyphs.isEmpty) return 0.0;
@@ -319,6 +343,23 @@ extension AnimatedSvgPainterTextPlainExtension on AnimatedSvgPainter {
       final isUpright = _isGlyphUprightInVertical(
         glyph,
         style.glyphOrientationVertical,
+      );
+      // Match the same translate/rotate operations used below so filter
+      // target bounds cover the vertical glyph as it is actually painted.
+      boundsRecorder?.call(
+        isUpright
+            ? ui.Rect.fromLTWH(
+                x - glyphWidth / 2,
+                cursorY,
+                glyphWidth,
+                paragraph.height,
+              )
+            : ui.Rect.fromLTWH(
+                x + glyphWidth / 2 - paragraph.height,
+                cursorY,
+                paragraph.height,
+                glyphWidth,
+              ),
       );
       canvas.save();
       canvas.translate(x, cursorY);

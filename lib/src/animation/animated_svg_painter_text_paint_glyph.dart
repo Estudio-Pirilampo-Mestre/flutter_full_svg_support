@@ -25,6 +25,7 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
     ui.BlendMode? blendMode,
     _ResolvedTextStyle? parentStyle,
     _TextLengthDistribution? textLengthDistribution,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     // Apply NFC normalization per SVG spec
     final normalizedText = _normalizeTextToNFC(text);
@@ -57,6 +58,7 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
         imageFilter: imageFilter,
         colorFilter: colorFilter,
         blendMode: blendMode,
+        boundsRecorder: boundsRecorder,
       );
     }
 
@@ -79,6 +81,7 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
         imageFilter: imageFilter,
         colorFilter: colorFilter,
         blendMode: blendMode,
+        boundsRecorder: boundsRecorder,
       );
     }
     final startCursorX = cursor.x;
@@ -185,6 +188,34 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
         drawY = transformedPos.dy;
       }
 
+      final unscaledDrawX = drawX;
+      final glyphBounds = ui.Rect.fromLTWH(
+        hasScaleFactor ? 0.0 : unscaledDrawX,
+        drawY,
+        glyphWidth,
+        paragraph.height,
+      );
+      var glyphBoundsTransform = Matrix4x4.identity();
+      if (hasScaleFactor) {
+        glyphBoundsTransform =
+            glyphBoundsTransform *
+            Matrix4x4.translation(unscaledDrawX, 0.0, 0.0) *
+            Matrix4x4.scale(scaleFactor, 1.0, 1.0);
+      }
+      if (rotation != 0.0) {
+        final pivotX = hasScaleFactor ? 0.0 : unscaledDrawX;
+        final radians = rotation * 3.1415926535897932 / 180.0;
+        glyphBoundsTransform =
+            glyphBoundsTransform *
+            Matrix4x4.translation(pivotX, cursor.y, 0.0) *
+            Matrix4x4.rotationZ(radians) *
+            Matrix4x4.translation(-pivotX, -cursor.y, 0.0);
+      }
+
+      // Mirror the scale and rotate operations used below so filter target
+      // bounds cover the glyph after every per-character transform.
+      boundsRecorder?.call(_transformRect(glyphBoundsTransform, glyphBounds));
+
       final strokeParagraph = _buildStrokeTextParagraph(glyph, style, node);
       final needsCanvasSave = rotation != 0.0 || hasScaleFactor;
       if (needsCanvasSave) {
@@ -259,6 +290,7 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
     ui.ImageFilter? imageFilter,
     ui.ColorFilter? colorFilter,
     ui.BlendMode? blendMode,
+    void Function(ui.Rect rect)? boundsRecorder,
   }) {
     // Use script-appropriate text direction
     final effectiveDirection = _getScriptDirection(scriptType);
@@ -279,6 +311,7 @@ extension AnimatedSvgPainterTextGlyphExtension on AnimatedSvgPainter {
       imageFilter: imageFilter,
       colorFilter: colorFilter,
       blendMode: blendMode,
+      boundsRecorder: boundsRecorder,
     );
   }
 

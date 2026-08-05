@@ -138,11 +138,8 @@ class AnimatedSvgPainter extends CustomPainter {
   Map<String, _SvgFontDefinition>? _svgFontsByFamilyCache;
   Map<String, _SvgFontDefinition>? _svgFontsByIdCache;
   Map<String, String>? _svgFontFamilyToFontIdCache;
-  bool _currentPassPaintFill = true;
-  bool _currentPassPaintStroke = true;
-  ui.Color? _currentPassFillColorOverride;
-  ui.Color? _currentPassStrokeColorOverride;
-  SvgFilterPaintPass? _currentFilterPass;
+  _FilterPaintState _currentFilterPaintState =
+      const _FilterPaintState.initial();
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
@@ -297,6 +294,15 @@ class AnimatedSvgPainter extends CustomPainter {
   /// Measures node bounds in current SVG user units.
   ui.Rect measureNodeBounds(SvgNode node) {
     return _getNodeBounds(node);
+  }
+
+  /// Measures the rendered SourceGraphic bounds used to size a filter target.
+  ///
+  /// Unlike [measureNodeBounds], this includes drawable descendant geometry
+  /// for containers and resolves geometry that is referenced through `<use>`.
+  /// It intentionally does not change transform-origin sizing semantics.
+  ui.Rect measureFilterTargetBounds(SvgNode node) {
+    return _resolveFilterTargetBounds(node);
   }
 
   /// Paints a node subtree to the provided canvas.

@@ -21,6 +21,28 @@ void _paintNodeImpl(
   );
 }
 
+/// Resolved filter inputs for painting one SVG node.
+///
+/// The values are computed once per node and shared by every rendering path,
+/// including content painted inside an advanced mask layer.
+class _ResolvedNodeFilterState {
+  const _ResolvedNodeFilterState({
+    required this.passes,
+    required this.targetBounds,
+    required this.requiresFilterExecution,
+    this.regionClip,
+  });
+
+  final List<SvgFilterPaintPass> passes;
+  final ui.Rect targetBounds;
+
+  /// Whether this node has a filter reference that must retain filter
+  /// semantics even when its resolved passes are visually identity.
+  final bool requiresFilterExecution;
+
+  final ui.Rect? regionClip;
+}
+
 /// Paints a node with use inheritance context for proper CSS cascade.
 /// This is the core rendering function that handles CSS property inheritance
 /// from `<use>` elements to their referenced content.
@@ -32,7 +54,6 @@ void _paintNodeImplWithUseContext(
   SvgNode? foreignObjectParent,
   _UseInheritanceContext? useContext,
 }) {
-  // Store use context for attribute resolution
   final previousUseContext = _currentUseContext;
   final previousUseContextLookup = useContextCustomPropertyLookup;
 
@@ -43,91 +64,130 @@ void _paintNodeImplWithUseContext(
     useContextCustomPropertyLookup = (name) =>
         useContext.getCustomProperty(name);
   }
-  final display = painter
-      ._getStyleOrAttributeValue(node, 'display')
-      ?.toString()
-      .trim();
-  if (display?.toLowerCase() == 'none') {
+
+  try {
+    final display = painter
+        ._getStyleOrAttributeValue(node, 'display')
+        ?.toString()
+        .trim();
+    if (display?.toLowerCase() == 'none') {
+      return;
+    }
+
+    final visibility = painter._getInheritedString(node, 'visibility');
+    final normalizedVisibility = visibility?.toLowerCase();
+    final isHidden =
+        normalizedVisibility == 'hidden' || normalizedVisibility == 'collapse';
+    final currentUseStack = useStack ?? <String>{};
+
+    canvas.save();
+    try {
+      // Apply transform if present.
+      painter._applyTransform(canvas, node);
+
+      // Baseline foreignObject viewport: offset + clip children to the region.
+      painter._applyForeignObjectViewport(canvas, node);
+
+      // Apply nested SVG viewport transform within foreignObject.
+      painter._applyNestedSvgViewportInForeignObject(
+        canvas,
+        node,
+        foreignObjectParent,
+      );
+
+      // Apply nested SVG viewport transform for regular SVG-in-SVG nesting.
+      painter._applyNestedSvgViewport(canvas, node, foreignObjectParent);
+
+      // Apply clipPath before the mask and node content.
+      painter._applyClipPath(canvas, node, useStack: currentUseStack);
+
+      void paintContent() {
+        _paintNodeContent(
+          painter,
+          canvas,
+          node,
+          isHidden: isHidden,
+          useStack: currentUseStack,
+          foreignObjectParent: foreignObjectParent,
+          useContext: useContext,
+        );
+      }
+
+      // Advanced masks capture the same node-content pipeline as normal
+      // rendering, so filter, group, and leaf behavior cannot drift.
+      if (painter._applyAdvancedMask(
+        canvas,
+        node,
+        useStack: currentUseStack,
+        paintContent: paintContent,
+      )) {
+        return;
+      }
+
+      // No advanced mask: retain the existing basic geometry-mask fallback.
+      painter._applyMask(canvas, node, useStack: currentUseStack);
+      paintContent();
+    } finally {
+      canvas.restore();
+    }
+  } finally {
     _currentUseContext = previousUseContext;
     useContextCustomPropertyLookup = previousUseContextLookup;
-    return;
   }
+}
 
-  final visibility = painter._getInheritedString(node, 'visibility');
-  final normalizedVisibility = visibility?.toLowerCase();
-  final isHidden =
-      normalizedVisibility == 'hidden' || normalizedVisibility == 'collapse';
-
-  final currentUseStack = useStack ?? <String>{};
-  canvas.save();
-
-  // Apply transform if present.
-  painter._applyTransform(canvas, node);
-
-  // Baseline foreignObject viewport: offset + clip children to the region.
-  painter._applyForeignObjectViewport(canvas, node);
-
-  // Apply nested SVG viewport transform within foreignObject
-  painter._applyNestedSvgViewportInForeignObject(
-    canvas,
-    node,
-    foreignObjectParent,
-  );
-
-  // Apply nested SVG viewport transform for regular SVG-in-SVG nesting.
-  painter._applyNestedSvgViewport(canvas, node, foreignObjectParent);
-
-  // Apply clipPath if present.
-  painter._applyClipPath(canvas, node, useStack: currentUseStack);
-
-  // Check if node has a mask - use advanced layer-based masking
-  final hasMaskApplied = _applyAdvancedMaskWrapper(
-    painter,
-    canvas,
-    node,
-    currentUseStack: currentUseStack,
-    isHidden: isHidden,
-    foreignObjectParent: foreignObjectParent,
-    useContext: useContext,
-  );
-
-  // If mask was applied via layer, content was painted in the callback
-  // Skip normal rendering
-  if (hasMaskApplied) {
-    // Restore previous use context and CSS variable lookup
-    _currentUseContext = previousUseContext;
-    useContextCustomPropertyLookup = previousUseContextLookup;
-    canvas.restore();
-    return;
-  }
-
-  // No mask or fallback to basic masking - continue normal rendering
-  // Apply basic geometry mask as fallback
-  painter._applyMask(canvas, node, useStack: currentUseStack);
-
-  final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._getNodeBounds(node);
-
-  // Compute filter region clip rect for output clipping.
-  // Per SVG spec, filter output is clipped to the filter region.
-  ui.Rect? filterRegionClip;
+_ResolvedNodeFilterState _resolveNodeFilterState(
+  AnimatedSvgPainter painter,
+  SvgNode node,
+) {
+  final passes = _resolveFilterPassesImpl(painter, node);
   final filterId = painter._getFilterId(node);
+  // An explicit filter reference must retain its region clip even when its
+  // resolved passes are visually identity. Only nodes without filter handling
+  // can skip the target-bounds work entirely.
+  final requiresFilterExecution =
+      filterId != null && painter.document.filters != null;
+  final targetBounds = requiresFilterExecution
+      ? painter._resolveFilterTargetBounds(node)
+      : ui.Rect.zero;
+
+  ui.Rect? regionClip;
   if (filterId != null && painter.document.filters != null) {
     final region = painter.document.filters!.getFilterRegion(filterId);
-    if (nodeBoundsForFilterPasses.width > 0 &&
-        nodeBoundsForFilterPasses.height > 0) {
-      filterRegionClip = region.computeRect(nodeBoundsForFilterPasses);
+    if (targetBounds.width > 0 && targetBounds.height > 0) {
+      regionClip = region.computeRect(targetBounds);
     }
   }
 
-  // Paint the node itself depending on its type.
+  return _ResolvedNodeFilterState(
+    passes: passes,
+    targetBounds: targetBounds,
+    requiresFilterExecution: requiresFilterExecution,
+    regionClip: regionClip,
+  );
+}
+
+/// Paints [node]'s own output and, unless a group layer already did so, its
+/// rendered children. The canvas transform, clip path, and any advanced mask
+/// have already been applied by [_paintNodeImplWithUseContext].
+void _paintNodeContent(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  SvgNode node, {
+  required bool isHidden,
+  required Set<String> useStack,
+  SvgNode? foreignObjectParent,
+  _UseInheritanceContext? useContext,
+}) {
+  final filterState = _resolveNodeFilterState(painter, node);
+
   if (!isHidden) {
     switch (node.tagName) {
       case 'rect':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintRect(
             canvas,
             node,
@@ -135,15 +195,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'circle':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintCircle(
             canvas,
             node,
@@ -151,15 +213,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'ellipse':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintEllipse(
             canvas,
             node,
@@ -167,15 +231,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'path':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintPath(
             canvas,
             node,
@@ -183,15 +249,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'polygon':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintPolygon(
             canvas,
             node,
@@ -199,15 +267,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'polyline':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintPolyline(
             canvas,
             node,
@@ -215,15 +285,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'line':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintLine(
             canvas,
             node,
@@ -231,15 +303,17 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'image':
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintImage(
             canvas,
             node,
@@ -247,8 +321,10 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
           isImageNode: true,
         );
         break;
@@ -256,7 +332,7 @@ void _paintNodeImplWithUseContext(
         _paintWithFilterPassesImpl(
           painter,
           canvas,
-          filterPasses,
+          filterState.passes,
           (imageFilter, colorFilter, blendMode) => painter._paintText(
             canvas,
             node,
@@ -264,13 +340,13 @@ void _paintNodeImplWithUseContext(
             colorFilter: colorFilter,
             blendMode: blendMode,
           ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          filterRegionClip: filterRegionClip,
+          targetNode: node,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
         );
         break;
       case 'tspan':
-        // Rendered from the parent <text> pass.
-        break;
       case 'textPath':
         // Rendered from the parent <text> pass.
         break;
@@ -278,89 +354,89 @@ void _paintNodeImplWithUseContext(
         painter._paintUse(
           canvas,
           node,
-          useStack: currentUseStack,
+          useStack: useStack,
           useContext: useContext,
+          filterState: filterState,
         );
         break;
       case 'a':
       case 'g':
       case 'svg':
       case 'foreignObject':
-        // Check requiredExtensions for foreignObject - skip if not supported
         if (node.tagName == 'foreignObject' &&
             !painter._shouldRenderForeignObject(node)) {
-          _currentUseContext = previousUseContext;
-          useContextCustomPropertyLookup = previousUseContextLookup;
-          canvas.restore();
           return;
-        }
-        // Groups apply saveLayer for opacity compositing if needed.
-        // Returns true if children were painted in the layer.
-        // Determine the foreignObjectParent context for the group
-        final SvgNode? groupFoParent;
-        if (node.tagName == 'foreignObject') {
-          groupFoParent = node;
-        } else if (node.tagName == 'svg') {
-          groupFoParent = null;
-        } else {
-          groupFoParent = foreignObjectParent;
         }
         if (_paintGroupWithOpacity(
           painter,
           canvas,
           node,
-          currentUseStack,
-          filterPasses: filterPasses,
-          foreignObjectParent: groupFoParent,
+          useStack,
+          filterPasses: filterState.passes,
+          targetNodeBounds: filterState.targetBounds,
+          filterRegionClip: filterState.regionClip,
+          requiresFilterExecution: filterState.requiresFilterExecution,
+          foreignObjectParent: foreignObjectParent,
           useContext: useContext,
         )) {
-          // Restore previous use context and CSS variable lookup
-          _currentUseContext = previousUseContext;
-          useContextCustomPropertyLookup = previousUseContextLookup;
-          canvas.restore();
           return;
         }
         break;
       case 'switch':
-        painter._paintSwitch(canvas, node, useStack: currentUseStack);
+        painter._paintSwitch(canvas, node, useStack: useStack);
         break;
       default:
-        // Ignore unsupported elements (animate, text, etc.).
+        // Ignore unsupported elements (animate, metadata, etc.).
         break;
     }
   }
 
-  // Recursively paint children.
-  if (painter._shouldPaintChildren(node)) {
-    // Determine if this node establishes a foreignObject context for children
-    // - foreignObject: sets new FO context for direct children
-    // - svg: resets FO context (SVG establishes new viewport, not affected by FO)
-    // - other elements: preserve FO context from parent
-    final SvgNode? foParent;
-    if (node.tagName == 'foreignObject') {
-      foParent = node;
-    } else if (node.tagName == 'svg') {
-      foParent = null; // SVG resets the FO context
-    } else {
-      foParent = foreignObjectParent;
-    }
-    for (final child in node.children) {
-      _paintNodeImplWithUseContext(
-        painter,
-        canvas,
-        child,
-        useStack: currentUseStack,
-        foreignObjectParent: foParent,
-        useContext: useContext,
-      );
-    }
+  _paintNodeChildren(
+    painter,
+    canvas,
+    node,
+    useStack,
+    foreignObjectParent: foreignObjectParent,
+    useContext: useContext,
+  );
+}
+
+SvgNode? _childForeignObjectParent(SvgNode node, SvgNode? foreignObjectParent) {
+  if (node.tagName == 'foreignObject') {
+    return node;
+  }
+  if (node.tagName == 'svg') {
+    return null;
+  }
+  return foreignObjectParent;
+}
+
+void _paintNodeChildren(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  SvgNode node,
+  Set<String> useStack, {
+  SvgNode? foreignObjectParent,
+  _UseInheritanceContext? useContext,
+}) {
+  if (!painter._shouldPaintChildren(node)) {
+    return;
   }
 
-  // Restore previous use context and CSS variable lookup
-  _currentUseContext = previousUseContext;
-  useContextCustomPropertyLookup = previousUseContextLookup;
-
-  canvas.restore();
+  final childForeignObjectParent = _childForeignObjectParent(
+    node,
+    foreignObjectParent,
+  );
+  for (final child in node.children) {
+    _paintNodeImplWithUseContext(
+      painter,
+      canvas,
+      child,
+      useStack: useStack,
+      foreignObjectParent: childForeignObjectParent,
+      useContext: useContext,
+    );
+  }
 }
 
 /// Paints group children with proper opacity, isolation, and
@@ -378,7 +454,10 @@ bool _paintGroupWithOpacity(
   ui.Canvas canvas,
   SvgNode node,
   Set<String> useStack, {
-  List<SvgFilterPaintPass>? filterPasses,
+  required List<SvgFilterPaintPass> filterPasses,
+  required ui.Rect targetNodeBounds,
+  required bool requiresFilterExecution,
+  ui.Rect? filterRegionClip,
   SvgNode? foreignObjectParent,
   _UseInheritanceContext? useContext,
 }) {
@@ -416,17 +495,11 @@ bool _paintGroupWithOpacity(
   final groupBlendMode = painter._resolveMixBlendMode(node);
   final hasGroupBlendMode = groupBlendMode != null;
 
-  // Find the first filter pass with a non-trivial image or color filter.
-  SvgFilterPaintPass? filterPass;
-  if (filterPasses != null) {
-    for (final p in filterPasses) {
-      if (p.imageFilter != null || p.colorFilter != null) {
-        filterPass = p;
-        break;
-      }
-    }
-  }
-  final hasFilter = filterPass != null;
+  // Filter passes describe the complete output of the filter graph. An
+  // explicit identity filter still needs execution so its declared region
+  // clips the composited image of the children.
+  final hasFilter =
+      requiresFilterExecution || !_isIdentityOnlyFilterPasses(filterPasses);
 
   // Determine if saveLayer is needed for compositing
   final needsLayer =
@@ -442,20 +515,13 @@ bool _paintGroupWithOpacity(
     return false;
   }
 
-  // Build the layer paint with opacity, blend mode, and optional filter.
+  // Build the outer layer paint. Group opacity and blend mode apply to the
+  // complete filter output, not to each individual filter pass.
   final layerPaint = ui.Paint()
     ..color = ui.Color.fromARGB((opacity * 255).round(), 255, 255, 255);
   if (hasGroupBlendMode) {
     layerPaint.blendMode = groupBlendMode;
   }
-  if (hasFilter) {
-    if (filterPass.imageFilter != null) {
-      layerPaint.imageFilter = filterPass.imageFilter;
-    } else if (filterPass.colorFilter != null) {
-      layerPaint.colorFilter = filterPass.colorFilter;
-    }
-  }
-
   canvas.saveLayer(null, layerPaint);
 
   // Push background context for enable-background: new.
@@ -464,30 +530,66 @@ bool _paintGroupWithOpacity(
     painter.document.filters!.pushBackgroundContext();
   }
 
-  // Paint children into the layer
-  if (painter._shouldPaintChildren(node)) {
-    // Determine if this node establishes a foreignObject context for children
-    // - foreignObject: sets new FO context for direct children
-    // - svg: resets FO context (SVG establishes new viewport)
-    // - other elements: preserve FO context from parent
-    final SvgNode? foParent;
-    if (node.tagName == 'foreignObject') {
-      foParent = node;
-    } else if (node.tagName == 'svg') {
-      foParent = null;
-    } else {
-      foParent = foreignObjectParent;
+  void paintGroupFilterSource({
+    ui.ImageFilter? imageFilter,
+    ui.ColorFilter? colorFilter,
+    ui.BlendMode? blendMode,
+  }) {
+    // A pass without paint effects composites the children unchanged;
+    // skip the layer in that case, mirroring the <use> source painter.
+    final hasPaintEffects =
+        imageFilter != null || colorFilter != null || blendMode != null;
+    ui.Paint? passPaint;
+    if (hasPaintEffects) {
+      passPaint = ui.Paint();
+      if (imageFilter != null) {
+        passPaint.imageFilter = imageFilter;
+      }
+      if (colorFilter != null) {
+        passPaint.colorFilter = colorFilter;
+      }
+      if (blendMode != null) {
+        passPaint.blendMode = blendMode;
+      }
+      canvas.saveLayer(null, passPaint);
     }
-    for (final child in node.children) {
-      _paintNodeImplWithUseContext(
+    try {
+      _paintNodeChildren(
         painter,
         canvas,
-        child,
-        useStack: useStack,
-        foreignObjectParent: foParent,
+        node,
+        useStack,
+        foreignObjectParent: foreignObjectParent,
         useContext: useContext,
       );
+    } finally {
+      if (hasPaintEffects) {
+        canvas.restore();
+      }
     }
+  }
+
+  if (hasFilter) {
+    _executeFilterPassesImpl(
+      painter,
+      canvas,
+      filterPasses,
+      _FilterRenderTarget(
+        targetNode: node,
+        bounds: targetNodeBounds,
+        filterRegionClip: filterRegionClip,
+        paintSource: paintGroupFilterSource,
+      ),
+    );
+  } else {
+    _paintNodeChildren(
+      painter,
+      canvas,
+      node,
+      useStack,
+      foreignObjectParent: foreignObjectParent,
+      useContext: useContext,
+    );
   }
 
   // Pop background context if it was pushed.
@@ -503,6 +605,7 @@ bool _paintLightingPassImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
   SvgFilterPaintPass pass, {
+  required SvgNode targetNode,
   required ui.Rect targetNodeBounds,
   ui.Rect? filterRegionClip,
 }) {
@@ -531,7 +634,7 @@ bool _paintLightingPassImpl(
     return false;
   }
 
-  final key = '$filterId|${width}x$height|$kind';
+  final key = '$filterId|${width}x$height|$kind|${targetNode.nodeKey}';
   final image = painter.lightingImagesByFilterKey[key];
   if (image == null) {
     return false;
@@ -661,6 +764,24 @@ List<SvgFilterPaintPass> _resolveFilterPassesImpl(
   return passes;
 }
 
+/// Returns true when [passes] consists of a single pass that has no visual
+/// effect, i.e. it is equivalent to [SvgFilterPaintPass.identity].
+///
+/// The check requires the pass to be exactly the base [SvgFilterPaintPass]
+/// type (not a specialized subclass such as [SvgDisplacementMapPaintPass] or
+/// [SvgTurbulencePaintPass]) and to be fully default: no `imageFilter`, no
+/// `colorFilter`, no `blendMode`, a zero `offset`, both paint channels
+/// enabled, and no color overrides. A specialized pass is never treated as
+/// identity, even if all of those fields happen to be empty, because it
+/// renders its output through a dedicated code path. Channel-restricted
+/// passes produced for FillPaint/StrokePaint inputs (paintFill/paintStroke
+/// selectively disabled) are not identity either: they suppress one paint
+/// channel and must go through the pass executor.
+///
+/// Nodes without a filter reference use this to short-circuit filter handling.
+/// An explicit filter that resolves to this pass must still execute so its
+/// declared filter region is applied. Pass resolution also uses the check to
+/// special-case a lone displacement-map primitive that resolved to identity.
 bool _isIdentityOnlyFilterPasses(List<SvgFilterPaintPass> passes) {
   if (passes.length != 1) {
     return false;
@@ -670,7 +791,11 @@ bool _isIdentityOnlyFilterPasses(List<SvgFilterPaintPass> passes) {
       pass.imageFilter == null &&
       pass.colorFilter == null &&
       pass.blendMode == null &&
-      pass.offset == ui.Offset.zero;
+      pass.offset == ui.Offset.zero &&
+      pass.paintFill &&
+      pass.paintStroke &&
+      pass.fillColorOverride == null &&
+      pass.strokeColorOverride == null;
 }
 
 /// Syncs animated attribute values from source SvgNodes to SvgFilter objects.
@@ -1048,6 +1173,67 @@ ui.Color? _resolveFilterPaintSourceColorImpl(
   return painter._applyOpacity(color, opacity * paintOpacity);
 }
 
+typedef _FilterSourcePainter =
+    void Function({
+      ui.ImageFilter? imageFilter,
+      ui.ColorFilter? colorFilter,
+      ui.BlendMode? blendMode,
+    });
+
+class _FilterRenderTarget {
+  const _FilterRenderTarget({
+    required this.paintSource,
+    required this.targetNode,
+    this.bounds,
+    this.filterRegionClip,
+    this.isImageNode = false,
+  });
+
+  final _FilterSourcePainter paintSource;
+  final SvgNode targetNode;
+  final ui.Rect? bounds;
+  final ui.Rect? filterRegionClip;
+  final bool isImageNode;
+}
+
+/// Ambient paint state for one active filter pass.
+///
+/// A filter executor replaces the current pass metadata while preserving any
+/// channel restriction imposed by an ancestor. The immutable value plus each
+/// executor's `try`/`finally` restoration forms a dynamic state stack.
+class _FilterPaintState {
+  const _FilterPaintState({
+    required this.paintFill,
+    required this.paintStroke,
+    this.fillColorOverride,
+    this.strokeColorOverride,
+    this.filterPass,
+  });
+
+  const _FilterPaintState.initial()
+    : paintFill = true,
+      paintStroke = true,
+      fillColorOverride = null,
+      strokeColorOverride = null,
+      filterPass = null;
+
+  final bool paintFill;
+  final bool paintStroke;
+  final ui.Color? fillColorOverride;
+  final ui.Color? strokeColorOverride;
+  final SvgFilterPaintPass? filterPass;
+
+  _FilterPaintState forPass(SvgFilterPaintPass pass) {
+    return _FilterPaintState(
+      paintFill: paintFill && pass.paintFill,
+      paintStroke: paintStroke && pass.paintStroke,
+      fillColorOverride: pass.fillColorOverride,
+      strokeColorOverride: pass.strokeColorOverride,
+      filterPass: pass,
+    );
+  }
+}
+
 void _paintWithFilterPassesImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
@@ -1058,130 +1244,193 @@ void _paintWithFilterPassesImpl(
     ui.BlendMode? blendMode,
   )
   paint, {
+  required SvgNode targetNode,
   ui.Rect? targetNodeBounds,
   ui.Rect? filterRegionClip,
+  bool requiresFilterExecution = false,
   bool isImageNode = false,
 }) {
-  final previousFillFlag = painter._currentPassPaintFill;
-  final previousStrokeFlag = painter._currentPassPaintStroke;
-  final previousFillOverride = painter._currentPassFillColorOverride;
-  final previousStrokeOverride = painter._currentPassStrokeColorOverride;
-  final previousFilterPass = painter._currentFilterPass;
-  for (final pass in passes) {
-    canvas.save();
-    if (filterRegionClip != null) {
-      canvas.clipRect(filterRegionClip);
-    }
-    painter._currentPassPaintFill = pass.paintFill;
-    painter._currentPassPaintStroke = pass.paintStroke;
-    painter._currentPassFillColorOverride = pass.fillColorOverride;
-    painter._currentPassStrokeColorOverride = pass.strokeColorOverride;
-    painter._currentFilterPass = pass;
-    if (pass.offset != ui.Offset.zero) {
-      canvas.translate(pass.offset.dx, pass.offset.dy);
-    }
-    if (pass is SvgDisplacementMapPaintPass && targetNodeBounds != null) {
-      final painted = _paintDisplacementPassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted && pass.textureHref == null && pass.mapHref == null) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgTurbulencePaintPass && targetNodeBounds != null) {
-      final painted = _paintTurbulencePassImpl(
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgFeImagePaintPass) {
-      _paintFeImagePassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-      );
-      canvas.restore();
-      continue;
-    }
-    if ((pass is SvgDiffuseLightingPaintPass ||
-            pass is SvgSpecularLightingPaintPass) &&
-        targetNodeBounds != null &&
-        !isImageNode) {
-      final painted = _paintLightingPassImpl(
-        painter,
-        canvas,
-        pass,
-        targetNodeBounds: targetNodeBounds,
-        filterRegionClip: filterRegionClip,
-      );
-      if (!painted) {
-        paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
-      }
-      canvas.restore();
-      continue;
-    }
-    if (pass is SvgInnerShadowPaintPass) {
-      // Open an isolated layer so dstOut only erases within this element's
-      // rendering. Any downstream feColorMatrix is applied at composite time
-      // via the saveLayer paint.
-      final layerPaint = ui.Paint();
-      if (pass.colorFilter != null) layerPaint.colorFilter = pass.colorFilter;
-      if (pass.imageFilter != null) layerPaint.imageFilter = pass.imageFilter;
-      canvas.saveLayer(null, layerPaint);
-      for (final p in pass.sourceGraphicPasses) {
-        painter._currentPassPaintFill = p.paintFill;
-        painter._currentPassPaintStroke = p.paintStroke;
-        painter._currentPassFillColorOverride = p.fillColorOverride;
-        painter._currentPassStrokeColorOverride = p.strokeColorOverride;
-        painter._currentFilterPass = p;
-        paint(p.imageFilter, p.colorFilter, p.blendMode);
-      }
-      for (final p in pass.blurAlphaPasses) {
-        final hasOffset = p.offset != ui.Offset.zero;
-        if (hasOffset) {
-          canvas.save();
-          canvas.translate(p.offset.dx, p.offset.dy);
+  // An unfiltered node resolves to a single fully-default identity pass.
+  // Paint it directly without entering the executor so descendant rendering
+  // retains the ambient channel restrictions imposed by an ancestor group
+  // pass (for example, FillPaint or StrokePaint). An explicit identity filter
+  // still enters the executor to apply its declared filter region.
+  if (!requiresFilterExecution && _isIdentityOnlyFilterPasses(passes)) {
+    paint(null, null, null);
+    return;
+  }
+  _executeFilterPassesImpl(
+    painter,
+    canvas,
+    passes,
+    _FilterRenderTarget(
+      targetNode: targetNode,
+      bounds: targetNodeBounds,
+      filterRegionClip: filterRegionClip,
+      isImageNode: isImageNode,
+      paintSource:
+          ({
+            ui.ImageFilter? imageFilter,
+            ui.ColorFilter? colorFilter,
+            ui.BlendMode? blendMode,
+          }) {
+            paint(imageFilter, colorFilter, blendMode);
+          },
+    ),
+  );
+}
+
+void _executeFilterPassesImpl(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  List<SvgFilterPaintPass> passes,
+  _FilterRenderTarget target,
+) {
+  final inheritedState = painter._currentFilterPaintState;
+  try {
+    for (final pass in passes) {
+      canvas.save();
+      try {
+        if (target.filterRegionClip != null) {
+          canvas.clipRect(target.filterRegionClip!);
         }
-        painter._currentPassPaintFill = p.paintFill;
-        painter._currentPassPaintStroke = p.paintStroke;
-        painter._currentPassFillColorOverride = p.fillColorOverride;
-        painter._currentPassStrokeColorOverride = p.strokeColorOverride;
-        painter._currentFilterPass = p;
-        paint(p.imageFilter, p.colorFilter, ui.BlendMode.dstOut);
-        if (hasOffset) canvas.restore();
+        painter._currentFilterPaintState = inheritedState.forPass(pass);
+        if (pass.offset != ui.Offset.zero) {
+          canvas.translate(pass.offset.dx, pass.offset.dy);
+        }
+        if (pass is SvgDisplacementMapPaintPass && target.bounds != null) {
+          final painted = _paintDisplacementPassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNode: target.targetNode,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted && pass.textureHref == null && pass.mapHref == null) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgTurbulencePaintPass && target.bounds != null) {
+          final painted = _paintTurbulencePassImpl(
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgFeImagePaintPass) {
+          _paintFeImagePassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNodeBounds: target.bounds,
+          );
+          continue;
+        }
+        if ((pass is SvgDiffuseLightingPaintPass ||
+                pass is SvgSpecularLightingPaintPass) &&
+            target.bounds != null &&
+            !target.isImageNode) {
+          final painted = _paintLightingPassImpl(
+            painter,
+            canvas,
+            pass,
+            targetNode: target.targetNode,
+            targetNodeBounds: target.bounds!,
+            filterRegionClip: target.filterRegionClip,
+          );
+          if (!painted) {
+            target.paintSource(
+              imageFilter: pass.imageFilter,
+              colorFilter: pass.colorFilter,
+              blendMode: pass.blendMode,
+            );
+          }
+          continue;
+        }
+        if (pass is SvgInnerShadowPaintPass) {
+          _paintInnerShadowPassImpl(painter, canvas, pass, target);
+          continue;
+        }
+        target.paintSource(
+          imageFilter: pass.imageFilter,
+          colorFilter: pass.colorFilter,
+          blendMode: pass.blendMode,
+        );
+      } finally {
+        canvas.restore();
       }
-      canvas.restore(); // composite isolated layer (colorFilter applied here)
-      canvas.restore(); // restore outer save from loop
-      continue;
     }
-    paint(pass.imageFilter, pass.colorFilter, pass.blendMode);
+  } finally {
+    painter._currentFilterPaintState = inheritedState;
+  }
+}
+
+void _paintInnerShadowPassImpl(
+  AnimatedSvgPainter painter,
+  ui.Canvas canvas,
+  SvgInnerShadowPaintPass pass,
+  _FilterRenderTarget target,
+) {
+  final inheritedState = painter._currentFilterPaintState;
+
+  // Open an isolated layer so dstOut only erases within this element's
+  // rendering. Any downstream feColorMatrix is applied at composite time
+  // via the saveLayer paint.
+  final layerPaint = ui.Paint();
+  if (pass.colorFilter != null) layerPaint.colorFilter = pass.colorFilter;
+  if (pass.imageFilter != null) layerPaint.imageFilter = pass.imageFilter;
+  canvas.saveLayer(null, layerPaint);
+  try {
+    for (final sourcePass in pass.sourceGraphicPasses) {
+      painter._currentFilterPaintState = inheritedState.forPass(sourcePass);
+      target.paintSource(
+        imageFilter: sourcePass.imageFilter,
+        colorFilter: sourcePass.colorFilter,
+        blendMode: sourcePass.blendMode,
+      );
+    }
+    for (final alphaPass in pass.blurAlphaPasses) {
+      canvas.save();
+      try {
+        if (alphaPass.offset != ui.Offset.zero) {
+          canvas.translate(alphaPass.offset.dx, alphaPass.offset.dy);
+        }
+        painter._currentFilterPaintState = inheritedState.forPass(alphaPass);
+        target.paintSource(
+          imageFilter: alphaPass.imageFilter,
+          colorFilter: alphaPass.colorFilter,
+          blendMode: ui.BlendMode.dstOut,
+        );
+      } finally {
+        canvas.restore();
+      }
+    }
+  } finally {
+    painter._currentFilterPaintState = inheritedState;
     canvas.restore();
   }
-  painter._currentPassPaintFill = previousFillFlag;
-  painter._currentPassPaintStroke = previousStrokeFlag;
-  painter._currentPassFillColorOverride = previousFillOverride;
-  painter._currentPassStrokeColorOverride = previousStrokeOverride;
-  painter._currentFilterPass = previousFilterPass;
 }
 
 bool _paintDisplacementPassImpl(
   AnimatedSvgPainter painter,
   ui.Canvas canvas,
   SvgDisplacementMapPaintPass pass, {
+  required SvgNode targetNode,
   required ui.Rect targetNodeBounds,
   ui.Rect? filterRegionClip,
 }) {
@@ -1196,7 +1445,9 @@ bool _paintDisplacementPassImpl(
     return false;
   }
 
-  final key = '${pass.displacementFilter.id}|${width}x$height';
+  final key = pass.textureHref == null && pass.mapHref == null
+      ? '${pass.displacementFilter.id}|${width}x$height|${targetNode.nodeKey}'
+      : '${pass.displacementFilter.id}|${width}x$height';
   final image = painter.displacementImagesByFilterKey[key];
   if (image == null) {
     return false;
@@ -1447,248 +1698,4 @@ double _resolveFeImageCoordinate({
 double? _parseSvgNumericToken(String value) {
   final cleaned = value.trim().replaceAll(RegExp(r'[a-zA-Z%]+$'), '');
   return double.tryParse(cleaned);
-}
-
-/// Wrapper function for applying advanced layer-based masks.
-///
-/// This checks if the node has a mask and applies it using the advanced
-/// masking system with proper luminance/alpha handling. If the node has
-/// a mask, this function paints the entire subtree content within the
-/// mask layer and returns true. Otherwise, returns false to allow
-/// normal rendering to proceed.
-bool _applyAdvancedMaskWrapper(
-  AnimatedSvgPainter painter,
-  ui.Canvas canvas,
-  SvgNode node, {
-  required Set<String> currentUseStack,
-  required bool isHidden,
-  SvgNode? foreignObjectParent,
-  _UseInheritanceContext? useContext,
-}) {
-  // Check if node has a mask reference
-  final maskValue = painter._getStyleOrAttributeValue(node, 'mask');
-  final maskId = painter._extractPaintServerId(maskValue);
-  if (maskId == null || maskId.isEmpty) {
-    return false;
-  }
-
-  // Apply advanced mask with content callback
-  return painter._applyAdvancedMask(
-    canvas,
-    node,
-    useStack: currentUseStack,
-    paintContent: () {
-      // Paint the node content and children within the mask layer
-      _paintNodeContentWithinMask(
-        painter,
-        canvas,
-        node,
-        isHidden: isHidden,
-        currentUseStack: currentUseStack,
-        foreignObjectParent: foreignObjectParent,
-        useContext: useContext,
-      );
-    },
-  );
-}
-
-/// Paints the node content and children within a mask layer context.
-void _paintNodeContentWithinMask(
-  AnimatedSvgPainter painter,
-  ui.Canvas canvas,
-  SvgNode node, {
-  required bool isHidden,
-  required Set<String> currentUseStack,
-  SvgNode? foreignObjectParent,
-  _UseInheritanceContext? useContext,
-}) {
-  final filterPasses = _resolveFilterPassesImpl(painter, node);
-  final nodeBoundsForFilterPasses = painter._getNodeBounds(node);
-
-  // Render the node content if not hidden
-  if (!isHidden) {
-    switch (node.tagName) {
-      case 'rect':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintRect(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-          isImageNode: true,
-        );
-        break;
-      case 'circle':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintCircle(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'ellipse':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintEllipse(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'path':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintPath(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'polygon':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintPolygon(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'polyline':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintPolyline(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'line':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintLine(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'image':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintImage(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'text':
-        _paintWithFilterPassesImpl(
-          painter,
-          canvas,
-          filterPasses,
-          (imageFilter, colorFilter, blendMode) => painter._paintText(
-            canvas,
-            node,
-            imageFilter: imageFilter,
-            colorFilter: colorFilter,
-            blendMode: blendMode,
-          ),
-          targetNodeBounds: nodeBoundsForFilterPasses,
-        );
-        break;
-      case 'use':
-        painter._paintUse(
-          canvas,
-          node,
-          useStack: currentUseStack,
-          useContext: useContext,
-        );
-        break;
-      case 'a':
-      case 'g':
-      case 'svg':
-      case 'foreignObject':
-        // Groups painted through children recursion below
-        break;
-      case 'switch':
-        painter._paintSwitch(canvas, node, useStack: currentUseStack);
-        break;
-      default:
-        break;
-    }
-  }
-
-  // Paint children
-  if (painter._shouldPaintChildren(node)) {
-    // Determine foreignObject context for children
-    // - foreignObject: sets new FO context
-    // - svg: resets FO context (new viewport)
-    // - other elements: preserve from parent
-    final SvgNode? foParent;
-    if (node.tagName == 'foreignObject') {
-      foParent = node;
-    } else if (node.tagName == 'svg') {
-      foParent = null;
-    } else {
-      foParent = foreignObjectParent;
-    }
-    for (final child in node.children) {
-      _paintNodeImplWithUseContext(
-        painter,
-        canvas,
-        child,
-        useStack: currentUseStack,
-        foreignObjectParent: foParent,
-        useContext: useContext,
-      );
-    }
-  }
 }
