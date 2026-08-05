@@ -902,6 +902,24 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
 
   /// Gets the bounding box of a node for transform-origin calculations.
   ui.Rect _getNodeBounds(SvgNode node) {
+    final bounds = _resolveGeometryBounds(node);
+
+    // Unlike ordinary referenced geometry, x/y are geometric properties of
+    // <use> and therefore contribute to its object bounding box. The shared
+    // resolver keeps use content in its local coordinates because container
+    // traversal applies the same translation in _mapChildBoundsToParent.
+    if (node.tagName.toLowerCase() == 'use') {
+      return bounds.shift(
+        ui.Offset(_getNumber(node, 'x') ?? 0.0, _getNumber(node, 'y') ?? 0.0),
+      );
+    }
+
+    return bounds;
+  }
+
+  /// Resolves the basic geometry for leaf nodes handled directly by their
+  /// numeric geometry attributes.
+  ui.Rect _resolveBasicGeometryBounds(SvgNode node) {
     final name = node.tagName.toLowerCase();
     switch (name) {
       case 'rect':
@@ -938,25 +956,26 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         final height = _getNumber(node, 'height') ?? 0.0;
         return ui.Rect.fromLTWH(x, y, width, height);
       default:
-        // For groups and complex shapes, use viewBox or return zero rect
+        // Non-renderable definitions may still expose a viewBox, but have no
+        // fill geometry of their own.
         final viewBox = _getViewBox(node);
         return viewBox ?? ui.Rect.zero;
     }
   }
 
-  /// Resolves the bounds of the SourceGraphic used by a node-level filter.
+  /// Resolves an SVG element's fill geometry in its local user coordinate
+  /// system, excluding the element's own transform.
   ///
-  /// Leaf nodes use their own geometry bounds. Container nodes use the union
-  /// of descendant geometry that participates in the filter target's bounding
-  /// box, expressed in the container's local
-  /// coordinate system. The node's own canvas transform is deliberately not
-  /// included: callers resolve this after applying that transform.
+  /// Leaf nodes use their geometric shape. Container nodes use the union of
+  /// descendant fill geometry mapped into the container coordinate system.
+  /// Referenced `<use>` content is resolved with the same viewport/viewBox
+  /// mapping as the renderer. [useGuard] breaks circular reference chains.
   ///
-  /// Viewport-relative rect geometry and geometry types that [_getNodeBounds]
-  /// cannot size (path, polygon, polyline, use) are resolved here so that
-  /// transform-origin bounds keep their existing behavior. [useGuard] tracks
-  /// visited reference ids to break circular `use` chains.
-  ui.Rect _resolveFilterTargetBounds(SvgNode node, [Set<String>? useGuard]) {
+  /// The node's own paint transform and the `<use>` element's own x/y
+  /// translation are deliberately excluded. Container traversal applies them
+  /// in [_mapChildBoundsToParent], while [_getNodeBounds] adds a top-level
+  /// `<use>` translation for transform-box reference-box resolution.
+  ui.Rect _resolveGeometryBounds(SvgNode node, [Set<String>? useGuard]) {
     switch (node.tagName) {
       case 'rect':
         final x =
@@ -1014,7 +1033,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
           final referenced = document.root.findById(hrefId);
           if (referenced == null ||
               !_isUseReferenceAllowedTag(referenced.tagName) ||
-              !_contributesToFilterBounds(referenced)) {
+              !_contributesToGeometryBounds(referenced)) {
             return ui.Rect.zero;
           }
           // Per SVG 1.1 §5.6, use→symbol and use→svg establish a viewport
@@ -1024,7 +1043,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
           // when the renderer clips. The use x/y translation is applied
           // later by _mapChildBoundsToParent.
           if (referenced.tagName == 'symbol' || referenced.tagName == 'svg') {
-            var contentBounds = _unionChildrenFilterBounds(referenced, guard);
+            var contentBounds = _unionChildrenGeometryBounds(referenced, guard);
             if (contentBounds.width <= 0 || contentBounds.height <= 0) {
               return ui.Rect.zero;
             }
@@ -1092,10 +1111,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
           // Other referenced elements are cloned with their own transform
           // into the use shadow tree, so map the referenced root's paint
           // transform like the render path does.
-          final referencedBounds = _resolveFilterTargetBounds(
-            referenced,
-            guard,
-          );
+          final referencedBounds = _resolveGeometryBounds(referenced, guard);
           return _mapChildBoundsToParent(referenced, referencedBounds);
         } finally {
           guard.remove(hrefId);
@@ -1105,31 +1121,35 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         // contributes geometry, mapped into the switch coordinate system
         // like any other child of a container.
         final activeChild = resolveActiveSwitchChild(node);
-        if (activeChild == null || !_contributesToFilterBounds(activeChild)) {
+        if (activeChild == null || !_contributesToGeometryBounds(activeChild)) {
           return ui.Rect.zero;
         }
-        final childBounds = _resolveFilterTargetBounds(activeChild, useGuard);
+        final childBounds = _resolveGeometryBounds(activeChild, useGuard);
         return _mapChildBoundsToParent(activeChild, childBounds);
       case 'text':
-        return _resolveTextFilterBounds(node);
+        return _resolveTextGeometryBounds(node);
     }
-    if (!_isFilterBoundsContainer(node)) {
-      return _getNodeBounds(node);
+    if (!_isGeometryBoundsContainer(node)) {
+      return _resolveBasicGeometryBounds(node);
     }
 
-    return _unionChildrenFilterBounds(node, useGuard);
+    return _unionChildrenGeometryBounds(node, useGuard);
   }
 
-  /// Unites the filter bounds of [node]'s geometric children, each mapped
-  /// into [node]'s local coordinate system.
-  ui.Rect _unionChildrenFilterBounds(SvgNode node, Set<String>? useGuard) {
+  /// Filter targets intentionally use the shared fill-geometry resolver.
+  ui.Rect _resolveFilterTargetBounds(SvgNode node) {
+    return _resolveGeometryBounds(node);
+  }
+
+  /// Unites [node]'s geometric children in its local coordinate system.
+  ui.Rect _unionChildrenGeometryBounds(SvgNode node, Set<String>? useGuard) {
     ui.Rect? bounds;
     for (final child in node.children) {
-      if (!_contributesToFilterBounds(child)) {
+      if (!_contributesToGeometryBounds(child)) {
         continue;
       }
 
-      final childBounds = _resolveFilterTargetBounds(child, useGuard);
+      final childBounds = _resolveGeometryBounds(child, useGuard);
       if (childBounds.width <= 0 || childBounds.height <= 0) {
         continue;
       }
@@ -1143,17 +1163,17 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     return bounds ?? ui.Rect.zero;
   }
 
-  /// Geometric bounds of a text node for filter target bounds.
+  /// Geometric fill bounds of a text node.
   ///
   /// Runs the real text paint pipeline on a throwaway recorder canvas and
   /// unions the exact chunk and glyph boxes the renderer computes, so
   /// tspan x/y/dx/dy positioning, text anchors, textLength, and bidi are
   /// honored without duplicating text layout semantics. Per-glyph scale and
   /// rotate contribute transformed glyph boxes. Text-path subtrees use
-  /// [_approximateTextFilterBounds].
-  ui.Rect _resolveTextFilterBounds(SvgNode node) {
+  /// [_approximateTextGeometryBounds].
+  ui.Rect _resolveTextGeometryBounds(SvgNode node) {
     if (_hasTextPathDescendant(node)) {
-      return _approximateTextFilterBounds(node);
+      return _approximateTextGeometryBounds(node);
     }
     final pictureRecorder = ui.PictureRecorder();
     ui.Rect? bounds;
@@ -1181,12 +1201,12 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     return false;
   }
 
-  /// Approximate geometric bounds of a text node for filter target bounds.
+  /// Approximate geometric fill bounds of a text node.
   ///
   /// Used as the textPath fallback. Measures the concatenated text content
   /// as a single paragraph at the first x/y position. It intentionally
   /// ignores tspan-relative offsets and per-glyph positioning.
-  ui.Rect _approximateTextFilterBounds(SvgNode node) {
+  ui.Rect _approximateTextGeometryBounds(SvgNode node) {
     final content = _collectTextContent(node).trim();
     if (content.isEmpty) {
       return ui.Rect.zero;
@@ -1224,7 +1244,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     return ui.Rect.fromLTWH(left, top, width, height);
   }
 
-  bool _isFilterBoundsContainer(SvgNode node) {
+  bool _isGeometryBoundsContainer(SvgNode node) {
     switch (node.tagName.toLowerCase()) {
       case 'a':
       case 'g':
@@ -1236,7 +1256,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
     }
   }
 
-  bool _contributesToFilterBounds(SvgNode node) {
+  bool _contributesToGeometryBounds(SvgNode node) {
     // display:none suppresses the entire subtree; descendants cannot
     // override it, so it gates containers and geometry alike.
     final display = _getStyleOrAttributeValue(
@@ -1247,11 +1267,9 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
       return false;
     }
 
-    // Unlike display:none, visibility:hidden/collapse does not remove an
-    // element from SVG bounding-box calculations. It only suppresses pixels
-    // in SourceGraphic, and visible descendants may override it. Keep all
-    // non-display:none geometry so objectBoundingBox filter regions remain
-    // correct; the paint path handles SourceGraphic visibility separately.
+    // Unlike display:none, visibility:hidden/collapse, opacity, fill, and
+    // stroke paint values do not remove geometry from SVG bounding-box
+    // calculations. Pixel suppression remains the paint path's concern.
     return true;
   }
 
