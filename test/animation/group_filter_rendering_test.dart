@@ -1521,6 +1521,116 @@ void main() {
     },
   );
 
+  testWidgets(
+    'visible descendant of a hidden use target contributes filter bounds',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+    <g id="hiddenGroup" visibility="hidden">
+      <rect width="32" height="32" visibility="visible"/>
+    </g>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <use href="#hiddenGroup"/>
+  </g>
+</svg>''';
+
+      final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+      // visibility can be overridden back to visible, so the hidden group
+      // must be traversed: the rect renders and the turbulence filter
+      // applies to its bounds instead of falling back to a plain paint.
+      expect(centerPixel[3], greaterThan(0));
+      expect(centerPixel[0], greaterThan(0));
+    },
+  );
+
+  testWidgets(
+    'visible descendant of a hidden switch child contributes filter bounds',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <switch>
+      <g visibility="hidden">
+        <rect width="32" height="32" visibility="visible"/>
+      </g>
+    </switch>
+  </g>
+</svg>''';
+
+      final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+      expect(centerPixel[3], greaterThan(0));
+      expect(centerPixel[0], greaterThan(0));
+    },
+  );
+
+  testWidgets(
+    'visible descendant of a hidden group child contributes filter bounds',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <g visibility="hidden">
+      <rect width="32" height="32" visibility="visible"/>
+    </g>
+  </g>
+</svg>''';
+
+      final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+      expect(centerPixel[3], greaterThan(0));
+      expect(centerPixel[0], greaterThan(0));
+    },
+  );
+
+  testWidgets('hidden group without a visible override stays empty', (
+    tester,
+  ) async {
+    const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="obbTurbulence" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.25"
+          numOctaves="1" seed="19"/>
+    </filter>
+  </defs>
+  <g filter="url(#obbTurbulence)">
+    <g visibility="hidden">
+      <rect width="32" height="32"/>
+    </g>
+  </g>
+</svg>''';
+
+    final centerPixel = _pixelAt(await _renderSvgPixels(tester, svg), 16, 16);
+
+    // Traversing hidden containers must not resurrect hidden geometry:
+    // without an explicit visible override nothing renders.
+    expect(centerPixel[3], 0);
+  });
+
   for (final withIds in <bool>[false, true]) {
     testWidgets(
       'source displacement precompute keeps shared-filter targets distinct '

@@ -1236,12 +1236,22 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
   }
 
   bool _contributesToFilterBounds(SvgNode node) {
+    // display:none suppresses the entire subtree; descendants cannot
+    // override it, so it gates containers and geometry alike.
     final display = _getStyleOrAttributeValue(
       node,
       'display',
     )?.toString().trim().toLowerCase();
     if (display == 'none') {
       return false;
+    }
+
+    // visibility is inherited but overridable: a hidden container may still
+    // hold explicitly visible descendants. Traverse containers and let each
+    // geometry node decide against its own effective visibility.
+    if (_isFilterBoundsContainer(node) ||
+        node.tagName.toLowerCase() == 'symbol') {
+      return true;
     }
 
     final visibility = _getInheritedString(
