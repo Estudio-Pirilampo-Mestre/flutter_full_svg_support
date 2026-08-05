@@ -49,7 +49,11 @@ jobs:
 
       - name: Install Android native toolchain
         run: |
-          yes | sdkmanager "cmake;3.22.1" "ndk;27.0.12077973"
+          sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+          yes | "$sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" \
+            "cmake;3.22.1" \
+            "ndk;27.0.12077973"
 
       - name: Create clean Flutter app
         run: |
