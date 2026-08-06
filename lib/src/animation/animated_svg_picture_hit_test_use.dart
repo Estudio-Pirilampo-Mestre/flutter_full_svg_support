@@ -210,7 +210,7 @@ extension _AnimatedSvgPictureStateHitTestUseExtension
     }
 
     final referenced = _document.root.findById(hrefId);
-    if (referenced == null || !_isUseReferenceAllowedTag(referenced.tagName)) {
+    if (referenced == null || !isSvgUseReferenceAllowedTag(referenced.tagName)) {
       // Referenced element not found or not allowed - no hit
       return null;
     }
@@ -458,10 +458,6 @@ extension _AnimatedSvgPictureStateHitTestUseExtension
 
   bool _isUseViewportReferenceTag(String tagName) {
     return tagName == 'symbol' || tagName == 'svg';
-  }
-
-  bool _isUseReferenceAllowedTag(String tagName) {
-    return isSvgUseReferenceAllowedTag(tagName);
   }
 
   Rect? _applyUseViewportTransform(

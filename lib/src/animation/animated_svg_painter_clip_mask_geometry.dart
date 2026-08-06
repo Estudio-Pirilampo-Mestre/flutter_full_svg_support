@@ -260,7 +260,7 @@ extension AnimatedSvgPainterClipMaskGeometryExtension on AnimatedSvgPainter {
       return;
     }
     final referenced = document.root.findById(hrefId);
-    if (referenced == null || !_isUseReferenceAllowedTag(referenced.tagName)) {
+    if (referenced == null || !isSvgUseReferenceAllowedTag(referenced.tagName)) {
       return;
     }
 
@@ -645,10 +645,6 @@ extension AnimatedSvgPainterClipMaskGeometryExtension on AnimatedSvgPainter {
     return Matrix4.identity()
       ..translateByDouble(translateX, translateY, 0, 1)
       ..scaleByDouble(scaleX, scaleY, 1, 1);
-  }
-
-  bool _isUseReferenceAllowedTag(String tagName) {
-    return isSvgUseReferenceAllowedTag(tagName);
   }
 
   _UseViewportTransform? _resolveUseViewportTransform({
