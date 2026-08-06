@@ -305,29 +305,118 @@ class AnimatedSvgPainter extends CustomPainter {
     return _resolveFilterTargetBounds(node);
   }
 
+  /// Builds a stable cache identity for SourceGraphic precomputation.
+  ///
+  /// A definition may be painted through more than one `<use>` instance. The
+  /// construction-time node keys avoid collisions between id-less siblings,
+  /// while the ordered use chain distinguishes separate render instances of
+  /// the same definition.
+  static String sourceFilterTargetInstanceKey(
+    SvgNode targetNode,
+    Iterable<SvgNode> useChain,
+  ) {
+    final chainKey = useChain.map((node) => node.nodeKey).join('>');
+    return chainKey.isEmpty
+        ? targetNode.nodeKey
+        : '${targetNode.nodeKey}|$chainKey';
+  }
+
   /// Paints a node subtree to the provided canvas.
   ///
-  /// When [ignoreFilter] is true, the node-level `filter` attribute is
-  /// temporarily disabled so callers can capture SourceGraphic content.
+  /// When [ignoreFilter] is true, the target node's `filter` attribute is
+  /// temporarily disabled so callers can capture SourceGraphic content. A
+  /// non-empty [useChain] paints from its outermost `<use>` so inherited
+  /// properties and coordinate transforms match the render instance.
   void paintNodeForRaster(
     ui.Canvas canvas,
     SvgNode node, {
     bool ignoreFilter = false,
+    List<SvgNode> useChain = const <SvgNode>[],
   }) {
-    final originalFilter = ignoreFilter
-        ? node.getRawAttributeValue('filter')
-        : null;
-    final shouldDisableFilter =
-        originalFilter != null && originalFilter.trim().isNotEmpty;
-    if (shouldDisableFilter) {
-      node.setAttribute('filter', 'none', rawValue: 'none');
+    final nodesToDisable = <SvgNode>{
+      if (ignoreFilter) node,
+      if (ignoreFilter) ...useChain,
+    };
+    final originalFilters = <SvgNode, String>{};
+    for (final candidate in nodesToDisable) {
+      final originalFilter = candidate.getRawAttributeValue('filter');
+      if (originalFilter == null || originalFilter.trim().isEmpty) {
+        continue;
+      }
+      originalFilters[candidate] = originalFilter;
+      candidate.setAttribute('filter', 'none', rawValue: 'none');
+    }
+
+    final previousCssRules = _currentDocumentCssRules;
+    final previousCssResolver = _currentDocumentCssResolver;
+    if (_currentDocumentCssRules == null) {
+      _currentDocumentCssRules = document.cssSelectorRules;
+      _currentDocumentCssResolver = _currentDocumentCssRules == null
+          ? null
+          : CssCascadeResolver(cssRules: _currentDocumentCssRules!);
     }
 
     try {
-      _paintNode(canvas, node);
+      if (useChain.isEmpty) {
+        _paintNode(canvas, node);
+      } else {
+        _paintNodeForRasterInUseContext(canvas, node, useChain);
+      }
     } finally {
-      if (shouldDisableFilter) {
-        node.setAttribute('filter', originalFilter, rawValue: originalFilter);
+      _currentDocumentCssRules = previousCssRules;
+      _currentDocumentCssResolver = previousCssResolver;
+      for (final entry in originalFilters.entries) {
+        entry.key.setAttribute('filter', entry.value, rawValue: entry.value);
+      }
+    }
+  }
+
+  void _paintNodeForRasterInUseContext(
+    ui.Canvas canvas,
+    SvgNode node,
+    List<SvgNode> useChain,
+  ) {
+    _UseInheritanceContext? useContext;
+    var saveCount = 0;
+    try {
+      for (final useNode in useChain) {
+        final hrefId = _extractHrefId(useNode);
+        if (hrefId == null || hrefId.isEmpty) {
+          return;
+        }
+        useContext = _UseInheritanceContext(
+          useNode: useNode,
+          parentContext: useContext,
+          cssRules: _currentDocumentCssRules ?? useContext?.cssRules,
+          shadowRootId: hrefId,
+        );
+        canvas.save();
+        saveCount++;
+        _applyTransform(canvas, useNode);
+        canvas.translate(
+          _getNumber(useNode, 'x') ?? 0.0,
+          _getNumber(useNode, 'y') ?? 0.0,
+        );
+      }
+      final previousParent = node.parent;
+      node.parent = useChain.last;
+      try {
+        _paintNodeImplWithUseContext(
+          this,
+          canvas,
+          node,
+          useStack: <String>{
+            for (final useNode in useChain)
+              if (_extractHrefId(useNode) case final String hrefId) hrefId,
+          },
+          useContext: useContext,
+        );
+      } finally {
+        node.parent = previousParent;
+      }
+    } finally {
+      for (var i = 0; i < saveCount; i++) {
+        canvas.restore();
       }
     }
   }

@@ -1655,6 +1655,128 @@ void main() {
     expect(centerPixel[3], 0);
   });
 
+  testWidgets(
+    'source displacement precompute resolves url fragment use hrefs',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="1"/>
+    </filter>
+    <rect id="definition" width="16" height="32"
+        filter="url(#sharedDisplacement)"/>
+  </defs>
+  <use href="url(#definition)" fill="#FF0000"/>
+  <use href="url(#definition)" x="16" fill="#0000FF"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final first = _pixelAt(pixels, 8, 16);
+      final second = _pixelAt(pixels, 24, 16);
+      expect(first[0], greaterThan(200));
+      expect(first[2], lessThan(40));
+      expect(first[3], greaterThan(0));
+      expect(second[0], lessThan(40));
+      expect(second[2], greaterThan(200));
+      expect(second[3], greaterThan(0));
+    },
+  );
+
+  testWidgets(
+    'source displacement precompute keeps nested use instances distinct',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="1"/>
+    </filter>
+    <rect id="definition" width="16" height="32"
+        filter="url(#sharedDisplacement)"/>
+    <use id="nested" href="#definition"/>
+  </defs>
+  <use href="#nested" fill="#FF0000"/>
+  <use href="#nested" x="16" fill="#0000FF"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final first = _pixelAt(pixels, 8, 16);
+      final second = _pixelAt(pixels, 24, 16);
+
+      expect(first[0], greaterThan(200));
+      expect(first[2], lessThan(40));
+      expect(first[3], greaterThan(0));
+      expect(second[0], lessThan(40));
+      expect(second[2], greaterThan(200));
+      expect(second[3], greaterThan(0));
+    },
+  );
+
+  for (final kind in <String>['diffuse', 'specular']) {
+    testWidgets(
+      'source $kind lighting precompute uses each use instance inherited fill',
+      (tester) async {
+        final lightingPrimitive = kind == 'diffuse'
+            ? '''
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>'''
+            : '''
+      <feSpecularLighting in="SourceGraphic" surfaceScale="2"
+          specularConstant="1" specularExponent="8" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feSpecularLighting>''';
+        final svg =
+            '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedLighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">$lightingPrimitive
+    </filter>
+    <g id="definition" filter="url(#sharedLighting)">
+      <rect width="8" height="32"/>
+      <rect x="8" width="8" height="32" opacity="0"/>
+    </g>
+  </defs>
+  <use href="#definition" fill="none"/>
+  <use href="#definition" x="16" fill="#FFFFFF"/>
+</svg>''';
+
+        final pixels = await _renderSvgPixels(
+          tester,
+          svg,
+          waitForAsyncFilterImages: true,
+        );
+        // Sample the transparent half at the inherited-fill alpha edge. A
+        // uniform opaque rectangle has the same flat surface normal as an
+        // empty one, so the edge makes the two source rasters observably
+        // different for both diffuse and specular lighting.
+        final unfilledInstance = _pixelAt(pixels, 8, 16);
+        final filledInstance = _pixelAt(pixels, 24, 16);
+
+        expect(
+          (unfilledInstance[1] - filledInstance[1]).abs(),
+          greaterThan(100),
+        );
+      },
+    );
+  }
+
   for (final withIds in <bool>[false, true]) {
     testWidgets(
       'source displacement precompute keeps shared-filter targets distinct '
