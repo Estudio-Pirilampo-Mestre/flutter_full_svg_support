@@ -347,6 +347,10 @@ class AnimatedSvgPainter extends CustomPainter {
       candidate.setAttribute('filter', 'none', rawValue: 'none');
     }
 
+    // Raster-capture painters are constructed ad hoc and may not have run
+    // the normal paint entry point that initializes these globals, yet
+    // inherited style resolution depends on them. Initialize from the
+    // document when missing, and restore the previous values afterwards.
     final previousCssRules = _currentDocumentCssRules;
     final previousCssResolver = _currentDocumentCssResolver;
     if (_currentDocumentCssRules == null) {
@@ -371,6 +375,13 @@ class AnimatedSvgPainter extends CustomPainter {
     }
   }
 
+  /// Replays the `<use>` chain so the captured SourceGraphic matches what
+  /// the real paint path produces for this render instance.
+  ///
+  /// Each `<use>` contributes its transform and x/y translation (same order
+  /// as `_paintUse`) plus a `_UseInheritanceContext` link, so inheritable
+  /// properties such as `fill` flow into the painted subtree exactly as they
+  /// do during normal rendering.
   void _paintNodeForRasterInUseContext(
     ui.Canvas canvas,
     SvgNode node,
@@ -398,6 +409,10 @@ class AnimatedSvgPainter extends CustomPainter {
           _getNumber(useNode, 'y') ?? 0.0,
         );
       }
+      // Simulate the SVG shadow tree: the clone's parent is the innermost
+      // <use>, so inherited-property lookups on the node must see the use
+      // chain rather than the node's definition-site ancestors. Restored in
+      // the finally below; this mutation assumes single-threaded capture.
       final previousParent = node.parent;
       node.parent = useChain.last;
       try {

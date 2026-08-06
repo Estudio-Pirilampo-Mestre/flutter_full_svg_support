@@ -261,6 +261,14 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     return requests;
   }
 
+  /// Collects every render instance that may need a SourceGraphic-based
+  /// filter precompute.
+  ///
+  /// A node reachable through `<use>` renders once per use chain, with that
+  /// chain's inherited properties and transforms, so each (node, chain) pair
+  /// is a distinct instance that needs its own precomputed image. The use
+  /// traversal mirrors `_paintUse`: same href extraction, allowed-tag
+  /// whitelist, cycle guard, and recursion depth cap.
   List<_SourceFilterRenderInstance> _collectSourceFilterRenderInstances() {
     final instances = <_SourceFilterRenderInstance>[];
 
@@ -1167,6 +1175,9 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     }
   }
 
+  /// Measures node bounds in document space, applying the same use-chain
+  /// transform (each use's transform, then its x/y translation) that the
+  /// raster capture path applies, so bounds and captured image stay aligned.
   ui.Rect _measureNodeBoundsInDocumentSpace(
     AnimatedSvgPainter painter,
     SvgNode node, {
@@ -1187,6 +1198,8 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     return _transformRectWithAffine(localBounds, matrix);
   }
 
+  /// Appends the `<use>` x/y translation, which per SVG 2 acts as an extra
+  /// translate applied after the element's own transform.
   void _appendUsePositionToAffine(List<double> matrix, SvgNode useNode) {
     final x = _getNumber(useNode, 'x');
     final y = _getNumber(useNode, 'y');

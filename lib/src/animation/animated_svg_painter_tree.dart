@@ -21,6 +21,11 @@ void _paintNodeImpl(
   );
 }
 
+/// Cache key for the node currently being painted.
+///
+/// `_currentUseContext` links innermost-first, so the collected chain is
+/// reversed to match the outermost-first order used when the precomputed
+/// image was captured.
 String _sourceFilterTargetInstanceKey(SvgNode targetNode) {
   final useChain = <SvgNode>[];
   for (
