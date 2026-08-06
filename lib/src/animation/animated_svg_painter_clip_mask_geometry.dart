@@ -648,32 +648,7 @@ extension AnimatedSvgPainterClipMaskGeometryExtension on AnimatedSvgPainter {
   }
 
   bool _isUseReferenceAllowedTag(String tagName) {
-    switch (tagName) {
-      case 'a':
-      case 'circle':
-      case 'desc':
-      case 'ellipse':
-      case 'g':
-      case 'image':
-      case 'line':
-      case 'metadata':
-      case 'path':
-      case 'polygon':
-      case 'polyline':
-      case 'rect':
-      case 'svg':
-      case 'switch':
-      case 'symbol':
-      case 'text':
-      case 'textPath':
-      case 'title':
-      case 'tref':
-      case 'tspan':
-      case 'use':
-        return true;
-      default:
-        return false;
-    }
+    return isSvgUseReferenceAllowedTag(tagName);
   }
 
   _UseViewportTransform? _resolveUseViewportTransform({

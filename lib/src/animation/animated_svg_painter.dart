@@ -16,6 +16,7 @@ import 'switch_processing.dart';
 import 'svg_dom.dart';
 import 'svg_filters.dart';
 import 'svg_transform.dart';
+import 'svg_use_references.dart';
 import 'transform_3d.dart';
 
 part 'animated_svg_painter_cache.dart';

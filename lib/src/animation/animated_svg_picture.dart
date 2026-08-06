@@ -24,6 +24,7 @@ import 'svg_js_bridge.dart';
 import 'svg_parser.dart';
 import 'svg_theme_apply.dart';
 import 'svg_transform.dart';
+import 'svg_use_references.dart';
 import 'transform_3d.dart';
 import '../svg_theme.dart';
 import '../utilities/file.dart';
