@@ -48,6 +48,21 @@ elseif(UNIX)
   if(ANDROID)
     find_library(log-lib log)
     target_link_libraries(${BRIDGE_NAME} PRIVATE m ${log-lib})
+    # NDK r28 and newer use 16 KB ELF LOAD alignment by default. Flutter
+    # 3.38 still defaults to NDK r27, where these flags are required for the
+    # resulting .so to run natively on Android devices with 16 KB pages.
+    if(COMMAND target_link_options)
+      target_link_options(${BRIDGE_NAME} PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
+      )
+    else()
+      # target_link_options was introduced in CMake 3.13. Keep the plugin's
+      # advertised CMake 3.10 minimum working for older host toolchains.
+      set_property(TARGET ${BRIDGE_NAME} APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
+      )
+    endif()
   else()
     target_link_libraries(${BRIDGE_NAME} PRIVATE m)
   endif()

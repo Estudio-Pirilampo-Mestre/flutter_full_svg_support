@@ -12,12 +12,10 @@ Render *any* SVG directly inside Flutter — crisp static icons and illustration
 
 `full_svg_flutter` gives you a `flutter_svg`-compatible `SvgPicture` API for static graphics **and** `FSvgPicture` / `AnimatedSvgPicture` for animation — all rendered by the same DOM-preserving engine, so static SVGs get the *exact* same fidelity (filters, masks, text, gradients) as animated ones.
 
-> **🆕 New in 1.4.0 — complete group filters and accurate transform origins.**
-> Container filters now execute the full ordered pass chain — including
-> turbulence, displacement, lighting, masks, and paint inputs — while
-> `transform-box: fill-box` resolves real geometry for paths, text, and
-> referenced `<use>` content. Complex SVGs now keep browser-style filter
-> composition and rotate or scale around their actual fill bounds.
+> **🆕 New in 1.4.1 — Android 16 KB page-size compatibility.**
+> The bundled QuickJS Android library now uses 16 KB ELF alignment, with CI
+> checks covering both native segments and APK packaging. See the
+> [changelog](CHANGELOG.md) for details.
 
 [svgator-site]: https://www.svgator.com/
 [qjs-engine-pkg]: https://pub.dev/packages/quickjs_engine
@@ -82,7 +80,7 @@ There are several ways to use animated vector graphics in Flutter: static SVG pa
 ```yaml
 # pubspec.yaml
 dependencies:
-  full_svg_flutter: ^1.4.0
+  full_svg_flutter: ^1.4.1
 ```
 
 ```dart
@@ -394,7 +392,7 @@ Known limitations:
 
 ```yaml
 dependencies:
-  full_svg_flutter: ^1.4.0
+  full_svg_flutter: ^1.4.1
 ```
 
 ```bash
@@ -421,7 +419,7 @@ When you might need to do something extra:
 | **You see "Failed to load dynamic library 'libquickjs_c_bridge_plugin.\*'"** on `flutter test` for macOS, Linux, or Windows | The library hasn't been built. Run `dart run quickjs_engine:build_native` once after `flutter pub get` (or read [Building from source](#building-the-native-library-from-source) below) |
 | **You ship to a less-common Android ABI** (riscv64, x86 32-bit) | Open `android/app/build.gradle` and add the ABI to `ndk.abiFilters`. Default ABIs (`armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`) are already configured by `quickjs_engine` |
 | **You target iOS < 11.0 or macOS < 10.13** | Raise the deployment target in your Xcode project — the bridge requires C++17, which needs at least these versions |
-| **You bundle the app as an `.aab` and Play Console rejects 16 KB page size** | This is fine for `quickjs_engine` — the bundled library is built with 16 KB page alignment via the standard NDK CMake pipeline |
+| **You bundle the app as an `.aab` and Play Console rejects 16 KB page size** | Upgrade to `quickjs_engine` 0.1.3 or newer, which links Android libraries with 16 KB ELF alignment. Also use Android Gradle Plugin 8.5.1 or newer so uncompressed native libraries receive 16 KB ZIP alignment. |
 
 ### Building the native library from source
 
