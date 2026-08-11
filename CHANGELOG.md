@@ -1,3 +1,15 @@
+## 1.4.1
+
+### Android 16 KB page-size compatibility
+
+**Fixed**
+
+- Updated `quickjs_engine` to `^0.1.3`, which links its Android native library
+  with 16 KB ELF `LOAD` segment alignment for compatibility with devices that
+  use a 16 KB memory page size.
+- Added release APK verification for native ELF segment alignment and 16 KB
+  ZIP alignment to prevent regressions in Android packaging.
+
 ## 1.4.0
 
 ### Complete group filters and geometry-accurate transform origins

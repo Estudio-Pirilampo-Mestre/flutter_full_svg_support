@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+- Linked Android native libraries with 16 KB ELF `LOAD` segment alignment so
+  apps run natively on 16 KB page-size devices when built with NDK r27.
+- Added release APK checks for both ELF segment alignment and ZIP alignment.
+- Preserved compatibility with the package's CMake 3.10 minimum.
+
 ## 0.1.2
 
 - Fixed Android release builds by linking the native QuickJS bridge with the

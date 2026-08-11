@@ -74,3 +74,39 @@ jobs:
         working-directory: ${{ runner.temp }}/quickjs_android_smoke
         run: |
           flutter build apk --release --target-platform android-arm64 --split-per-abi -v
+
+      - name: Verify Android 16 KB alignment
+        working-directory: ${{ runner.temp }}/quickjs_android_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          extracted_dir="$RUNNER_TEMP/quickjs_android_arm64_libs"
+          ndk_root="$ANDROID_SDK_ROOT/ndk/27.0.12077973"
+          readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          test -f "$apk"
+          test -x "$readelf"
+          mkdir -p "$extracted_dir"
+          unzip -q "$apk" 'lib/arm64-v8a/*.so' -d "$extracted_dir"
+
+          library_count=0
+          while IFS= read -r library; do
+            library_count=$((library_count + 1))
+            load_count=0
+            while IFS= read -r segment_alignment; do
+              load_count=$((load_count + 1))
+              if (( segment_alignment < 0x4000 )); then
+                echo "::error file=$library::ELF LOAD alignment is $segment_alignment; expected at least 0x4000"
+                exit 1
+              fi
+            done < <("$readelf" -lW "$library" | awk '$1 == "LOAD" { print $NF }')
+            test "$load_count" -gt 0
+          done < <(find "$extracted_dir/lib/arm64-v8a" -type f -name '*.so' -print)
+          test "$library_count" -gt 0
+
+          zipalign="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name zipalign -print | sort -V | tail -n 1)"
+          test -n "$zipalign"
+          test -x "$zipalign"
+          "$zipalign" -c -P 16 -v 4 "$apk"
