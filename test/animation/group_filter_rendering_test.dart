@@ -1937,4 +1937,78 @@ void main() {
       expect(centerPixel[1], greaterThan(100));
     },
   );
+  testWidgets(
+    'source displacement precompute keeps a scaled use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="displacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic"
+          scale="12" xChannelSelector="R" yChannelSelector="B"/>
+    </filter>
+    <g id="definition" filter="url(#displacement)">
+      <rect width="8" height="16" fill="#FF0000"/>
+      <rect x="8" width="8" height="16" fill="#0000FF"/>
+    </g>
+  </defs>
+  <use href="#definition" transform="scale(2)"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+
+      // The precomputed 16x16 local SourceGraphic is applied through the
+      // use's scale during the normal paint. A document-space capture would
+      // miss the 16x16 runtime cache key and silently fall back to the
+      // unfiltered graphic (red at 12,12 and blue at 16,16).
+      final displacedLeft = _pixelAt(pixels, 12, 12);
+      final displacedRight = _pixelAt(pixels, 16, 16);
+      expect(displacedLeft[0], lessThan(40));
+      expect(displacedLeft[2], greaterThan(200));
+      expect(displacedRight[0], greaterThan(200));
+      expect(displacedRight[2], lessThan(40));
+    },
+  );
+
+  testWidgets(
+    'source lighting precompute keeps use x/y outside local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" width="12" height="12" fill="#FFFFFF"
+        filter="url(#lighting)"/>
+  </defs>
+  <use href="#definition" x="4" y="4" transform="scale(2)"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final translatedCenter = _pixelAt(pixels, 16, 16);
+
+      // x/y remains a paint-side placement transform; it must not be baked
+      // into the SourceGraphic filter raster. The scaled use begins at (8, 8),
+      // so (4,4) stays transparent and its interior is lit.
+      expect(_pixelAt(pixels, 4, 4)[3], 0);
+      expect(translatedCenter[0], lessThan(100));
+      expect(translatedCenter[1], greaterThan(100));
+    },
+  );
 }
