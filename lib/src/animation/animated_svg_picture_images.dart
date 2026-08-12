@@ -789,11 +789,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
                   Duration.microsecondsPerSecond,
         hasAnimations: _hasAnimations,
       );
-      final nodeBounds = _measureNodeBoundsInDocumentSpace(
-        boundsPainter,
-        sourceNode,
-        useChain: sourceInstance.useChain,
-      );
+      final nodeBounds = boundsPainter.measureFilterTargetBounds(sourceNode);
       if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
         continue;
       }
@@ -949,11 +945,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
                     Duration.microsecondsPerSecond,
           hasAnimations: _hasAnimations,
         );
-        final nodeBounds = _measureNodeBoundsInDocumentSpace(
-          boundsPainter,
-          sourceNode,
-          useChain: sourceInstance.useChain,
-        );
+        final nodeBounds = boundsPainter.measureFilterTargetBounds(sourceNode);
         if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
           continue;
         }
@@ -1144,11 +1136,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       hasAnimations: _hasAnimations,
     );
 
-    final nodeBounds = _measureNodeBoundsInDocumentSpace(
-      painter,
-      node,
-      useChain: useChain,
-    );
+    final nodeBounds = painter.measureFilterTargetBounds(node);
     if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
       return null;
     }
@@ -1163,6 +1151,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       node,
       ignoreFilter: true,
       useChain: useChain,
+      applyUseTransforms: false,
     );
 
     final picture = recorder.endRecording();
@@ -1175,153 +1164,6 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     }
   }
 
-  /// Measures node bounds in document space, applying the same use-chain
-  /// transform (each use's transform, then its x/y translation) that the
-  /// raster capture path applies, so bounds and captured image stay aligned.
-  ui.Rect _measureNodeBoundsInDocumentSpace(
-    AnimatedSvgPainter painter,
-    SvgNode node, {
-    List<SvgNode> useChain = const <SvgNode>[],
-  }) {
-    final localBounds = painter.measureFilterTargetBounds(node);
-    if (localBounds.width <= 0 || localBounds.height <= 0) {
-      return localBounds;
-    }
-
-    final matrix = _identityAffineMatrix();
-    for (final useNode in useChain) {
-      _appendNodeTransformToAffine(matrix, useNode);
-      _appendUsePositionToAffine(matrix, useNode);
-    }
-    _appendNodeTransformToAffine(matrix, node);
-
-    return _transformRectWithAffine(localBounds, matrix);
-  }
-
-  /// Appends the `<use>` x/y translation, which per SVG 2 acts as an extra
-  /// translate applied after the element's own transform.
-  void _appendUsePositionToAffine(List<double> matrix, SvgNode useNode) {
-    final x = _getNumber(useNode, 'x');
-    final y = _getNumber(useNode, 'y');
-    if (x != null || y != null) {
-      _multiplyAffine(matrix, <double>[1, 0, 0, 1, x ?? 0.0, y ?? 0.0]);
-    }
-  }
-
-  List<double> _identityAffineMatrix() => <double>[1, 0, 0, 1, 0, 0];
-
-  void _appendNodeTransformToAffine(List<double> matrix, SvgNode node) {
-    final raw = node.getAttributeValue('transform')?.toString();
-    if (raw == null || raw.trim().isEmpty) {
-      return;
-    }
-
-    final transforms = SvgTransform.parse(raw);
-    for (final transform in transforms) {
-      switch (transform.type) {
-        case SvgTransformType.translate:
-          final tx = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          final ty = transform.values.length > 1 ? transform.values[1] : 0.0;
-          _multiplyAffine(matrix, <double>[1, 0, 0, 1, tx, ty]);
-          break;
-        case SvgTransformType.scale:
-          final sx = transform.values.isNotEmpty ? transform.values[0] : 1.0;
-          final sy = transform.values.length > 1 ? transform.values[1] : sx;
-          _multiplyAffine(matrix, <double>[sx, 0, 0, sy, 0, 0]);
-          break;
-        case SvgTransformType.rotate:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          final radians = angle * math.pi / 180.0;
-          final cosA = math.cos(radians);
-          final sinA = math.sin(radians);
-          if (transform.values.length >= 3) {
-            final cx = transform.values[1];
-            final cy = transform.values[2];
-            _multiplyAffine(matrix, <double>[1, 0, 0, 1, cx, cy]);
-            _multiplyAffine(matrix, <double>[cosA, sinA, -sinA, cosA, 0, 0]);
-            _multiplyAffine(matrix, <double>[1, 0, 0, 1, -cx, -cy]);
-          } else {
-            _multiplyAffine(matrix, <double>[cosA, sinA, -sinA, cosA, 0, 0]);
-          }
-          break;
-        case SvgTransformType.skewX:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          _multiplyAffine(matrix, <double>[
-            1,
-            0,
-            math.tan(angle * math.pi / 180.0),
-            1,
-            0,
-            0,
-          ]);
-          break;
-        case SvgTransformType.skewY:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          _multiplyAffine(matrix, <double>[
-            1,
-            math.tan(angle * math.pi / 180.0),
-            0,
-            1,
-            0,
-            0,
-          ]);
-          break;
-        case SvgTransformType.matrix:
-          if (transform.values.length >= 6) {
-            _multiplyAffine(matrix, <double>[
-              transform.values[0],
-              transform.values[1],
-              transform.values[2],
-              transform.values[3],
-              transform.values[4],
-              transform.values[5],
-            ]);
-          }
-          break;
-        default:
-          break;
-      }
-    }
-  }
-
-  void _multiplyAffine(List<double> current, List<double> next) {
-    final a = current[0] * next[0] + current[2] * next[1];
-    final b = current[1] * next[0] + current[3] * next[1];
-    final c = current[0] * next[2] + current[2] * next[3];
-    final d = current[1] * next[2] + current[3] * next[3];
-    final e = current[0] * next[4] + current[2] * next[5] + current[4];
-    final f = current[1] * next[4] + current[3] * next[5] + current[5];
-    current[0] = a;
-    current[1] = b;
-    current[2] = c;
-    current[3] = d;
-    current[4] = e;
-    current[5] = f;
-  }
-
-  ui.Rect _transformRectWithAffine(ui.Rect rect, List<double> matrix) {
-    final p1 = _transformPointWithAffine(rect.left, rect.top, matrix);
-    final p2 = _transformPointWithAffine(rect.right, rect.top, matrix);
-    final p3 = _transformPointWithAffine(rect.left, rect.bottom, matrix);
-    final p4 = _transformPointWithAffine(rect.right, rect.bottom, matrix);
-
-    final minX = math.min(math.min(p1.dx, p2.dx), math.min(p3.dx, p4.dx));
-    final maxX = math.max(math.max(p1.dx, p2.dx), math.max(p3.dx, p4.dx));
-    final minY = math.min(math.min(p1.dy, p2.dy), math.min(p3.dy, p4.dy));
-    final maxY = math.max(math.max(p1.dy, p2.dy), math.max(p3.dy, p4.dy));
-
-    return ui.Rect.fromLTRB(minX, minY, maxX, maxY);
-  }
-
-  ui.Offset _transformPointWithAffine(double x, double y, List<double> matrix) {
-    return ui.Offset(
-      matrix[0] * x + matrix[2] * y + matrix[4],
-      matrix[1] * x + matrix[3] * y + matrix[5],
-    );
-  }
-
-  /// Checks if an href refers to an SVG file.
-  /// Returns true for .svg file extension or image/svg+xml MIME type in data URIs.
   bool _isSvgImageHref(String href) {
     // Check file extension
     final lowerHref = href.toLowerCase();

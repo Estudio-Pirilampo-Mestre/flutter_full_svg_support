@@ -1872,4 +1872,69 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'source lighting precompute keeps a scaled use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" width="16" height="16" fill="#FFFFFF"
+        filter="url(#lighting)"/>
+  </defs>
+  <use href="#definition" transform="scale(2)"/>
+</svg>''';
+
+      final centerPixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        16,
+        16,
+      );
+
+      expect(centerPixel[0], lessThan(100));
+      expect(centerPixel[1], greaterThan(100));
+    },
+  );
+
+  testWidgets(
+    'source lighting precompute keeps a rotated nested use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" x="8" y="12" width="16" height="8"
+        fill="#FFFFFF" filter="url(#lighting)"/>
+    <g id="nested">
+      <use href="#definition"/>
+    </g>
+  </defs>
+  <use href="#nested" transform="rotate(90 16 16)"/>
+</svg>''';
+
+      final centerPixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        16,
+        16,
+      );
+
+      expect(centerPixel[0], lessThan(100));
+      expect(centerPixel[1], greaterThan(100));
+    },
+  );
 }

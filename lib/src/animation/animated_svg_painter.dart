@@ -325,13 +325,16 @@ class AnimatedSvgPainter extends CustomPainter {
   ///
   /// When [ignoreFilter] is true, the target node's `filter` attribute is
   /// temporarily disabled so callers can capture SourceGraphic content. A
-  /// non-empty [useChain] paints from its outermost `<use>` so inherited
-  /// properties and coordinate transforms match the render instance.
+  /// non-empty [useChain] replays the render instance's inherited properties
+  /// and, by default, coordinate transforms. Set [applyUseTransforms] to
+  /// false to capture in the target's local filter coordinate space while
+  /// preserving use-element inheritance.
   void paintNodeForRaster(
     ui.Canvas canvas,
     SvgNode node, {
     bool ignoreFilter = false,
     List<SvgNode> useChain = const <SvgNode>[],
+    bool applyUseTransforms = true,
   }) {
     final nodesToDisable = <SvgNode>{
       if (ignoreFilter) node,
@@ -364,7 +367,12 @@ class AnimatedSvgPainter extends CustomPainter {
       if (useChain.isEmpty) {
         _paintNode(canvas, node);
       } else {
-        _paintNodeForRasterInUseContext(canvas, node, useChain);
+        _paintNodeForRasterInUseContext(
+          canvas,
+          node,
+          useChain,
+          applyUseTransforms: applyUseTransforms,
+        );
       }
     } finally {
       _currentDocumentCssRules = previousCssRules;
@@ -375,18 +383,19 @@ class AnimatedSvgPainter extends CustomPainter {
     }
   }
 
-  /// Replays the `<use>` chain so the captured SourceGraphic matches what
-  /// the real paint path produces for this render instance.
+  /// Replays the use-element chain so the captured SourceGraphic has the same
+  /// inherited properties as its render instance.
   ///
-  /// Each `<use>` contributes its transform and x/y translation (same order
-  /// as `_paintUse`) plus a `_UseInheritanceContext` link, so inheritable
+  /// Each use element adds a `_UseInheritanceContext` link so inheritable
   /// properties such as `fill` flow into the painted subtree exactly as they
-  /// do during normal rendering.
+  /// do during normal rendering. When [applyUseTransforms] is true, each use
+  /// also contributes its transform and x/y translation in _paintUse order.
   void _paintNodeForRasterInUseContext(
     ui.Canvas canvas,
     SvgNode node,
-    List<SvgNode> useChain,
-  ) {
+    List<SvgNode> useChain, {
+    required bool applyUseTransforms,
+  }) {
     _UseInheritanceContext? useContext;
     var saveCount = 0;
     try {
@@ -401,13 +410,15 @@ class AnimatedSvgPainter extends CustomPainter {
           cssRules: _currentDocumentCssRules ?? useContext?.cssRules,
           shadowRootId: hrefId,
         );
-        canvas.save();
-        saveCount++;
-        _applyTransform(canvas, useNode);
-        canvas.translate(
-          _getNumber(useNode, 'x') ?? 0.0,
-          _getNumber(useNode, 'y') ?? 0.0,
-        );
+        if (applyUseTransforms) {
+          canvas.save();
+          saveCount++;
+          _applyTransform(canvas, useNode);
+          canvas.translate(
+            _getNumber(useNode, 'x') ?? 0.0,
+            _getNumber(useNode, 'y') ?? 0.0,
+          );
+        }
       }
       // Simulate the SVG shadow tree: the clone's parent is the innermost
       // <use>, so inherited-property lookups on the node must see the use
