@@ -2,7 +2,7 @@ part of 'animated_svg_picture.dart';
 
 /// Maximum recursion depth for nested `<use>` elements (matching Blink).
 /// This prevents infinite loops and excessive resource usage.
-const int _kMaxUseRecursionDepthHitTest = 10;
+const int _kMaxUseRecursionDepthHitTest = maxSvgUseRecursionDepth;
 
 /// Context for tracking pointer-events inheritance across `<use>` boundaries.
 /// Also handles event retargeting per SVG spec - events from shadow content
@@ -210,7 +210,7 @@ extension _AnimatedSvgPictureStateHitTestUseExtension
     }
 
     final referenced = _document.root.findById(hrefId);
-    if (referenced == null || !_isUseReferenceAllowedTag(referenced.tagName)) {
+    if (referenced == null || !isSvgUseReferenceAllowedTag(referenced.tagName)) {
       // Referenced element not found or not allowed - no hit
       return null;
     }
@@ -458,35 +458,6 @@ extension _AnimatedSvgPictureStateHitTestUseExtension
 
   bool _isUseViewportReferenceTag(String tagName) {
     return tagName == 'symbol' || tagName == 'svg';
-  }
-
-  bool _isUseReferenceAllowedTag(String tagName) {
-    switch (tagName) {
-      case 'a':
-      case 'circle':
-      case 'desc':
-      case 'ellipse':
-      case 'g':
-      case 'image':
-      case 'line':
-      case 'metadata':
-      case 'path':
-      case 'polygon':
-      case 'polyline':
-      case 'rect':
-      case 'svg':
-      case 'switch':
-      case 'symbol':
-      case 'text':
-      case 'textPath':
-      case 'title':
-      case 'tref':
-      case 'tspan':
-      case 'use':
-        return true;
-      default:
-        return false;
-    }
   }
 
   Rect? _applyUseViewportTransform(

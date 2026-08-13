@@ -21,6 +21,26 @@ void _paintNodeImpl(
   );
 }
 
+/// Cache key for the node currently being painted.
+///
+/// `_currentUseContext` links innermost-first, so the collected chain is
+/// reversed to match the outermost-first order used when the precomputed
+/// image was captured.
+String _sourceFilterTargetInstanceKey(SvgNode targetNode) {
+  final useChain = <SvgNode>[];
+  for (
+    _UseInheritanceContext? context = _currentUseContext;
+    context != null;
+    context = context.parentContext
+  ) {
+    useChain.add(context.useNode);
+  }
+  return AnimatedSvgPainter.sourceFilterTargetInstanceKey(
+    targetNode,
+    useChain.reversed,
+  );
+}
+
 /// Resolved filter inputs for painting one SVG node.
 ///
 /// The values are computed once per node and shared by every rendering path,
@@ -634,7 +654,8 @@ bool _paintLightingPassImpl(
     return false;
   }
 
-  final key = '$filterId|${width}x$height|$kind|${targetNode.nodeKey}';
+  final key =
+      '$filterId|${width}x$height|$kind|${_sourceFilterTargetInstanceKey(targetNode)}';
   final image = painter.lightingImagesByFilterKey[key];
   if (image == null) {
     return false;
@@ -1446,7 +1467,7 @@ bool _paintDisplacementPassImpl(
   }
 
   final key = pass.textureHref == null && pass.mapHref == null
-      ? '${pass.displacementFilter.id}|${width}x$height|${targetNode.nodeKey}'
+      ? '${pass.displacementFilter.id}|${width}x$height|${_sourceFilterTargetInstanceKey(targetNode)}'
       : '${pass.displacementFilter.id}|${width}x$height';
   final image = painter.displacementImagesByFilterKey[key];
   if (image == null) {

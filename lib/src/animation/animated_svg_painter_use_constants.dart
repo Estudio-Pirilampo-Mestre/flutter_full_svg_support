@@ -2,7 +2,7 @@ part of 'animated_svg_painter.dart';
 
 /// Maximum recursion depth for nested `<use>` elements (matching Blink).
 /// This prevents infinite loops and excessive resource usage.
-const int _kMaxUseRecursionDepth = 10;
+const int _kMaxUseRecursionDepth = maxSvgUseRecursionDepth;
 
 /// Global CSS rules available during painting.
 /// Set by the painter when rendering begins.

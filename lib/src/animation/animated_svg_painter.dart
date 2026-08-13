@@ -16,6 +16,7 @@ import 'switch_processing.dart';
 import 'svg_dom.dart';
 import 'svg_filters.dart';
 import 'svg_transform.dart';
+import 'svg_use_references.dart';
 import 'transform_3d.dart';
 
 part 'animated_svg_painter_cache.dart';
@@ -304,29 +305,144 @@ class AnimatedSvgPainter extends CustomPainter {
     return _resolveFilterTargetBounds(node);
   }
 
+  /// Builds a stable cache identity for SourceGraphic precomputation.
+  ///
+  /// A definition may be painted through more than one `<use>` instance. The
+  /// construction-time node keys avoid collisions between id-less siblings,
+  /// while the ordered use chain distinguishes separate render instances of
+  /// the same definition.
+  static String sourceFilterTargetInstanceKey(
+    SvgNode targetNode,
+    Iterable<SvgNode> useChain,
+  ) {
+    final chainKey = useChain.map((node) => node.nodeKey).join('>');
+    return chainKey.isEmpty
+        ? targetNode.nodeKey
+        : '${targetNode.nodeKey}|$chainKey';
+  }
+
   /// Paints a node subtree to the provided canvas.
   ///
-  /// When [ignoreFilter] is true, the node-level `filter` attribute is
-  /// temporarily disabled so callers can capture SourceGraphic content.
+  /// When [ignoreFilter] is true, the target node's `filter` attribute is
+  /// temporarily disabled so callers can capture SourceGraphic content. A
+  /// non-empty [useChain] replays the render instance's inherited properties
+  /// and, by default, coordinate transforms. Set [applyUseTransforms] to
+  /// false to capture in the target's local filter coordinate space while
+  /// preserving use-element inheritance.
   void paintNodeForRaster(
     ui.Canvas canvas,
     SvgNode node, {
     bool ignoreFilter = false,
+    List<SvgNode> useChain = const <SvgNode>[],
+    bool applyUseTransforms = true,
   }) {
-    final originalFilter = ignoreFilter
-        ? node.getRawAttributeValue('filter')
-        : null;
-    final shouldDisableFilter =
-        originalFilter != null && originalFilter.trim().isNotEmpty;
-    if (shouldDisableFilter) {
-      node.setAttribute('filter', 'none', rawValue: 'none');
+    final nodesToDisable = <SvgNode>{
+      if (ignoreFilter) node,
+      if (ignoreFilter) ...useChain,
+    };
+    final originalFilters = <SvgNode, String>{};
+    for (final candidate in nodesToDisable) {
+      final originalFilter = candidate.getRawAttributeValue('filter');
+      if (originalFilter == null || originalFilter.trim().isEmpty) {
+        continue;
+      }
+      originalFilters[candidate] = originalFilter;
+      candidate.setAttribute('filter', 'none', rawValue: 'none');
+    }
+
+    // Raster-capture painters are constructed ad hoc and may not have run
+    // the normal paint entry point that initializes these globals, yet
+    // inherited style resolution depends on them. Initialize from the
+    // document when missing, and restore the previous values afterwards.
+    final previousCssRules = _currentDocumentCssRules;
+    final previousCssResolver = _currentDocumentCssResolver;
+    if (_currentDocumentCssRules == null) {
+      _currentDocumentCssRules = document.cssSelectorRules;
+      _currentDocumentCssResolver = _currentDocumentCssRules == null
+          ? null
+          : CssCascadeResolver(cssRules: _currentDocumentCssRules!);
     }
 
     try {
-      _paintNode(canvas, node);
+      if (useChain.isEmpty) {
+        _paintNode(canvas, node);
+      } else {
+        _paintNodeForRasterInUseContext(
+          canvas,
+          node,
+          useChain,
+          applyUseTransforms: applyUseTransforms,
+        );
+      }
     } finally {
-      if (shouldDisableFilter) {
-        node.setAttribute('filter', originalFilter, rawValue: originalFilter);
+      _currentDocumentCssRules = previousCssRules;
+      _currentDocumentCssResolver = previousCssResolver;
+      for (final entry in originalFilters.entries) {
+        entry.key.setAttribute('filter', entry.value, rawValue: entry.value);
+      }
+    }
+  }
+
+  /// Replays the use-element chain so the captured SourceGraphic has the same
+  /// inherited properties as its render instance.
+  ///
+  /// Each use element adds a `_UseInheritanceContext` link so inheritable
+  /// properties such as `fill` flow into the painted subtree exactly as they
+  /// do during normal rendering. When [applyUseTransforms] is true, each use
+  /// also contributes its transform and x/y translation in _paintUse order.
+  void _paintNodeForRasterInUseContext(
+    ui.Canvas canvas,
+    SvgNode node,
+    List<SvgNode> useChain, {
+    required bool applyUseTransforms,
+  }) {
+    _UseInheritanceContext? useContext;
+    var saveCount = 0;
+    try {
+      for (final useNode in useChain) {
+        final hrefId = _extractHrefId(useNode);
+        if (hrefId == null || hrefId.isEmpty) {
+          return;
+        }
+        useContext = _UseInheritanceContext(
+          useNode: useNode,
+          parentContext: useContext,
+          cssRules: _currentDocumentCssRules ?? useContext?.cssRules,
+          shadowRootId: hrefId,
+        );
+        if (applyUseTransforms) {
+          canvas.save();
+          saveCount++;
+          _applyTransform(canvas, useNode);
+          canvas.translate(
+            _getNumber(useNode, 'x') ?? 0.0,
+            _getNumber(useNode, 'y') ?? 0.0,
+          );
+        }
+      }
+      // Simulate the SVG shadow tree: the clone's parent is the innermost
+      // <use>, so inherited-property lookups on the node must see the use
+      // chain rather than the node's definition-site ancestors. Restored in
+      // the finally below; this mutation assumes single-threaded capture.
+      final previousParent = node.parent;
+      node.parent = useChain.last;
+      try {
+        _paintNodeImplWithUseContext(
+          this,
+          canvas,
+          node,
+          useStack: <String>{
+            for (final useNode in useChain)
+              if (_extractHrefId(useNode) case final String hrefId) hrefId,
+          },
+          useContext: useContext,
+        );
+      } finally {
+        node.parent = previousParent;
+      }
+    } finally {
+      for (var i = 0; i < saveCount; i++) {
+        canvas.restore();
       }
     }
   }

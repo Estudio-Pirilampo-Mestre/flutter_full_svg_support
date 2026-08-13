@@ -211,7 +211,7 @@ extension _AnimatedSvgPictureStateHitTestTraversalExtension
     }
 
     final referenced = _document.root.findById(hrefId);
-    if (referenced == null || !_isUseReferenceAllowedTag(referenced.tagName)) {
+    if (referenced == null || !isSvgUseReferenceAllowedTag(referenced.tagName)) {
       return const _HitTestResult();
     }
 

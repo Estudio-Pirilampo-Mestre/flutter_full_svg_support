@@ -1655,6 +1655,128 @@ void main() {
     expect(centerPixel[3], 0);
   });
 
+  testWidgets(
+    'source displacement precompute resolves url fragment use hrefs',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="1"/>
+    </filter>
+    <rect id="definition" width="16" height="32"
+        filter="url(#sharedDisplacement)"/>
+  </defs>
+  <use href="url(#definition)" fill="#FF0000"/>
+  <use href="url(#definition)" x="16" fill="#0000FF"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final first = _pixelAt(pixels, 8, 16);
+      final second = _pixelAt(pixels, 24, 16);
+      expect(first[0], greaterThan(200));
+      expect(first[2], lessThan(40));
+      expect(first[3], greaterThan(0));
+      expect(second[0], lessThan(40));
+      expect(second[2], greaterThan(200));
+      expect(second[3], greaterThan(0));
+    },
+  );
+
+  testWidgets(
+    'source displacement precompute keeps nested use instances distinct',
+    (tester) async {
+      const svg = '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedDisplacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="1"/>
+    </filter>
+    <rect id="definition" width="16" height="32"
+        filter="url(#sharedDisplacement)"/>
+    <use id="nested" href="#definition"/>
+  </defs>
+  <use href="#nested" fill="#FF0000"/>
+  <use href="#nested" x="16" fill="#0000FF"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final first = _pixelAt(pixels, 8, 16);
+      final second = _pixelAt(pixels, 24, 16);
+
+      expect(first[0], greaterThan(200));
+      expect(first[2], lessThan(40));
+      expect(first[3], greaterThan(0));
+      expect(second[0], lessThan(40));
+      expect(second[2], greaterThan(200));
+      expect(second[3], greaterThan(0));
+    },
+  );
+
+  for (final kind in <String>['diffuse', 'specular']) {
+    testWidgets(
+      'source $kind lighting precompute uses each use instance inherited fill',
+      (tester) async {
+        final lightingPrimitive = kind == 'diffuse'
+            ? '''
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>'''
+            : '''
+      <feSpecularLighting in="SourceGraphic" surfaceScale="2"
+          specularConstant="1" specularExponent="8" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feSpecularLighting>''';
+        final svg =
+            '''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sharedLighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">$lightingPrimitive
+    </filter>
+    <g id="definition" filter="url(#sharedLighting)">
+      <rect width="8" height="32"/>
+      <rect x="8" width="8" height="32" opacity="0"/>
+    </g>
+  </defs>
+  <use href="#definition" fill="none"/>
+  <use href="#definition" x="16" fill="#FFFFFF"/>
+</svg>''';
+
+        final pixels = await _renderSvgPixels(
+          tester,
+          svg,
+          waitForAsyncFilterImages: true,
+        );
+        // Sample the transparent half at the inherited-fill alpha edge. A
+        // uniform opaque rectangle has the same flat surface normal as an
+        // empty one, so the edge makes the two source rasters observably
+        // different for both diffuse and specular lighting.
+        final unfilledInstance = _pixelAt(pixels, 8, 16);
+        final filledInstance = _pixelAt(pixels, 24, 16);
+
+        expect(
+          (unfilledInstance[1] - filledInstance[1]).abs(),
+          greaterThan(100),
+        );
+      },
+    );
+  }
+
   for (final withIds in <bool>[false, true]) {
     testWidgets(
       'source displacement precompute keeps shared-filter targets distinct '
@@ -1750,4 +1872,143 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'source lighting precompute keeps a scaled use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" width="16" height="16" fill="#FFFFFF"
+        filter="url(#lighting)"/>
+  </defs>
+  <use href="#definition" transform="scale(2)"/>
+</svg>''';
+
+      final centerPixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        16,
+        16,
+      );
+
+      expect(centerPixel[0], lessThan(100));
+      expect(centerPixel[1], greaterThan(100));
+    },
+  );
+
+  testWidgets(
+    'source lighting precompute keeps a rotated nested use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" x="8" y="12" width="16" height="8"
+        fill="#FFFFFF" filter="url(#lighting)"/>
+    <g id="nested">
+      <use href="#definition"/>
+    </g>
+  </defs>
+  <use href="#nested" transform="rotate(90 16 16)"/>
+</svg>''';
+
+      final centerPixel = _pixelAt(
+        await _renderSvgPixels(tester, svg, waitForAsyncFilterImages: true),
+        16,
+        16,
+      );
+
+      expect(centerPixel[0], lessThan(100));
+      expect(centerPixel[1], greaterThan(100));
+    },
+  );
+  testWidgets(
+    'source displacement precompute keeps a scaled use in local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="displacement" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDisplacementMap in="SourceGraphic" in2="SourceGraphic"
+          scale="12" xChannelSelector="R" yChannelSelector="B"/>
+    </filter>
+    <g id="definition" filter="url(#displacement)">
+      <rect width="8" height="16" fill="#FF0000"/>
+      <rect x="8" width="8" height="16" fill="#0000FF"/>
+    </g>
+  </defs>
+  <use href="#definition" transform="scale(2)"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+
+      // The precomputed 16x16 local SourceGraphic is applied through the
+      // use's scale during the normal paint. A document-space capture would
+      // miss the 16x16 runtime cache key and silently fall back to the
+      // unfiltered graphic (red at 12,12 and blue at 16,16).
+      final displacedLeft = _pixelAt(pixels, 12, 12);
+      final displacedRight = _pixelAt(pixels, 16, 16);
+      expect(displacedLeft[0], lessThan(40));
+      expect(displacedLeft[2], greaterThan(200));
+      expect(displacedRight[0], greaterThan(200));
+      expect(displacedRight[2], lessThan(40));
+    },
+  );
+
+  testWidgets(
+    'source lighting precompute keeps use x/y outside local filter space',
+    (tester) async {
+      const svg = r'''
+<svg width="32" height="32" viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="lighting" filterUnits="objectBoundingBox"
+        x="0" y="0" width="1" height="1">
+      <feDiffuseLighting in="SourceGraphic" surfaceScale="2"
+          diffuseConstant="1" lighting-color="#00FF00">
+        <feDistantLight azimuth="225" elevation="45"/>
+      </feDiffuseLighting>
+    </filter>
+    <rect id="definition" width="12" height="12" fill="#FFFFFF"
+        filter="url(#lighting)"/>
+  </defs>
+  <use href="#definition" x="4" y="4" transform="scale(2)"/>
+</svg>''';
+
+      final pixels = await _renderSvgPixels(
+        tester,
+        svg,
+        waitForAsyncFilterImages: true,
+      );
+      final translatedCenter = _pixelAt(pixels, 16, 16);
+
+      // x/y remains a paint-side placement transform; it must not be baked
+      // into the SourceGraphic filter raster. The scaled use begins at (8, 8),
+      // so (4,4) stays transparent and its interior is lit.
+      expect(_pixelAt(pixels, 4, 4)[3], 0);
+      expect(translatedCenter[0], lessThan(100));
+      expect(translatedCenter[1], greaterThan(100));
+    },
+  );
 }

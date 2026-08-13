@@ -1032,7 +1032,7 @@ extension AnimatedSvgPainterCanvasTransformExtension on AnimatedSvgPainter {
         try {
           final referenced = document.root.findById(hrefId);
           if (referenced == null ||
-              !_isUseReferenceAllowedTag(referenced.tagName) ||
+              !isSvgUseReferenceAllowedTag(referenced.tagName) ||
               !_contributesToGeometryBounds(referenced)) {
             return ui.Rect.zero;
           }

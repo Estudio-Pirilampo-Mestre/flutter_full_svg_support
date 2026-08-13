@@ -177,7 +177,7 @@ extension _AnimatedSvgPictureStateHitTestVisibilityExtension
         }
         final referenced = _document.root.findById(hrefId);
         if (referenced == null ||
-            !_isUseReferenceAllowedTag(referenced.tagName)) {
+            !isSvgUseReferenceAllowedTag(referenced.tagName)) {
           return false;
         }
         final translated = Matrix4.copy(matrix)
@@ -411,7 +411,7 @@ extension _AnimatedSvgPictureStateHitTestVisibilityExtension
         }
         final referenced = _document.root.findById(hrefId);
         if (referenced == null ||
-            !_isUseReferenceAllowedTag(referenced.tagName)) {
+            !isSvgUseReferenceAllowedTag(referenced.tagName)) {
           return false;
         }
         final translated = Matrix4.copy(matrix)

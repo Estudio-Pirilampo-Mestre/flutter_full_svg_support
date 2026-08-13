@@ -260,7 +260,7 @@ extension AnimatedSvgPainterClipMaskGeometryExtension on AnimatedSvgPainter {
       return;
     }
     final referenced = document.root.findById(hrefId);
-    if (referenced == null || !_isUseReferenceAllowedTag(referenced.tagName)) {
+    if (referenced == null || !isSvgUseReferenceAllowedTag(referenced.tagName)) {
       return;
     }
 
@@ -645,35 +645,6 @@ extension AnimatedSvgPainterClipMaskGeometryExtension on AnimatedSvgPainter {
     return Matrix4.identity()
       ..translateByDouble(translateX, translateY, 0, 1)
       ..scaleByDouble(scaleX, scaleY, 1, 1);
-  }
-
-  bool _isUseReferenceAllowedTag(String tagName) {
-    switch (tagName) {
-      case 'a':
-      case 'circle':
-      case 'desc':
-      case 'ellipse':
-      case 'g':
-      case 'image':
-      case 'line':
-      case 'metadata':
-      case 'path':
-      case 'polygon':
-      case 'polyline':
-      case 'rect':
-      case 'svg':
-      case 'switch':
-      case 'symbol':
-      case 'text':
-      case 'textPath':
-      case 'title':
-      case 'tref':
-      case 'tspan':
-      case 'use':
-        return true;
-      default:
-        return false;
-    }
   }
 
   _UseViewportTransform? _resolveUseViewportTransform({

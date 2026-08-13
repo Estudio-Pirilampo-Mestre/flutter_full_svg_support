@@ -261,6 +261,62 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     return requests;
   }
 
+  /// Collects every render instance that may need a SourceGraphic-based
+  /// filter precompute.
+  ///
+  /// A node reachable through `<use>` renders once per use chain, with that
+  /// chain's inherited properties and transforms, so each (node, chain) pair
+  /// is a distinct instance that needs its own precomputed image. The use
+  /// traversal mirrors `_paintUse`: same href extraction, allowed-tag
+  /// whitelist, cycle guard, and recursion depth cap.
+  List<_SourceFilterRenderInstance> _collectSourceFilterRenderInstances() {
+    final instances = <_SourceFilterRenderInstance>[];
+
+    void visit(
+      SvgNode node, {
+      List<SvgNode> useChain = const <SvgNode>[],
+      Set<String> useStack = const <String>{},
+    }) {
+      // Definition children only render when reached through a <use> shadow
+      // tree, so do not precompute definition-site variants for them.
+      if (node.tagName == 'defs') {
+        return;
+      }
+
+      instances.add(
+        _SourceFilterRenderInstance(node: node, useChain: useChain),
+      );
+
+      if (node.tagName == 'use') {
+        final hrefId = _extractHrefId(node);
+        if (hrefId == null ||
+            hrefId.isEmpty ||
+            useStack.contains(hrefId) ||
+            useStack.length >= maxSvgUseRecursionDepth) {
+          return;
+        }
+        final referenced = _document.root.findById(hrefId);
+        if (referenced == null ||
+            !isSvgUseReferenceAllowedTag(referenced.tagName)) {
+          return;
+        }
+        visit(
+          referenced,
+          useChain: <SvgNode>[...useChain, node],
+          useStack: <String>{...useStack, hrefId},
+        );
+        return;
+      }
+
+      for (final child in node.children) {
+        visit(child, useChain: useChain, useStack: useStack);
+      }
+    }
+
+    visit(_document.root);
+    return instances;
+  }
+
   List<_LightingImageRequest> _collectSourceLightingRequests() {
     final filters = _document.filters;
     if (filters == null) {
@@ -269,44 +325,39 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
 
     final requests = <_LightingImageRequest>[];
     final seenRequestKeys = <String>{};
-
-    void visit(SvgNode node) {
-      final filterId = _extractFilterIdFromNode(node);
-      if (filterId != null && node.tagName != 'image') {
-        final passes = filters.resolvePaintPasses(filterId);
-        for (final pass in passes) {
-          if (pass is SvgDiffuseLightingPaintPass) {
-            final requestKey = '$filterId|diffuse|${node.nodeKey}';
-            if (seenRequestKeys.add(requestKey)) {
-              requests.add(
-                _LightingImageRequest.sourceDiffuse(
-                  filterId: filterId,
-                  sourceNode: node,
-                  diffusePass: pass,
-                ),
-              );
-            }
-          } else if (pass is SvgSpecularLightingPaintPass) {
-            final requestKey = '$filterId|specular|${node.nodeKey}';
-            if (seenRequestKeys.add(requestKey)) {
-              requests.add(
-                _LightingImageRequest.sourceSpecular(
-                  filterId: filterId,
-                  sourceNode: node,
-                  specularPass: pass,
-                ),
-              );
-            }
+    for (final sourceInstance in _collectSourceFilterRenderInstances()) {
+      final sourceNode = sourceInstance.node;
+      final filterId = _extractFilterIdFromNode(sourceNode);
+      if (filterId == null || sourceNode.tagName == 'image') {
+        continue;
+      }
+      final passes = filters.resolvePaintPasses(filterId);
+      for (final pass in passes) {
+        if (pass is SvgDiffuseLightingPaintPass) {
+          final requestKey = '$filterId|diffuse|${sourceInstance.key}';
+          if (seenRequestKeys.add(requestKey)) {
+            requests.add(
+              _LightingImageRequest.sourceDiffuse(
+                filterId: filterId,
+                sourceInstance: sourceInstance,
+                diffusePass: pass,
+              ),
+            );
+          }
+        } else if (pass is SvgSpecularLightingPaintPass) {
+          final requestKey = '$filterId|specular|${sourceInstance.key}';
+          if (seenRequestKeys.add(requestKey)) {
+            requests.add(
+              _LightingImageRequest.sourceSpecular(
+                filterId: filterId,
+                sourceInstance: sourceInstance,
+                specularPass: pass,
+              ),
+            );
           }
         }
       }
-
-      for (final child in node.children) {
-        visit(child);
-      }
     }
-
-    visit(_document.root);
     return requests;
   }
 
@@ -318,84 +369,79 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
 
     final requests = <_DisplacementImageRequest>[];
     final seenRequestKeys = <String>{};
-
-    void visit(SvgNode node) {
+    for (final sourceInstance in _collectSourceFilterRenderInstances()) {
+      final node = sourceInstance.node;
       final filterId = _extractFilterIdFromNode(node);
-      if (filterId != null) {
-        final primitives = filters.getAllById(filterId);
-        if (primitives.length == 1 &&
-            primitives.single is SvgDisplacementMapFilter) {
-          final primitive = primitives.single as SvgDisplacementMapFilter;
-          final textureSource = _resolveDisplacementBuiltInInput(
-            primitive.input,
-            defaultToSourceGraphic: true,
-          );
-          final mapSource = _resolveDisplacementBuiltInInput(
-            primitive.input2,
-            defaultToSourceGraphic: false,
-          );
-          if (textureSource != null &&
-              mapSource != null &&
-              textureSource != _DisplacementInputSource.href &&
-              mapSource != _DisplacementInputSource.href) {
+      if (filterId == null) {
+        continue;
+      }
+      final primitives = filters.getAllById(filterId);
+      if (primitives.length == 1 &&
+          primitives.single is SvgDisplacementMapFilter) {
+        final primitive = primitives.single as SvgDisplacementMapFilter;
+        final textureSource = _resolveDisplacementBuiltInInput(
+          primitive.input,
+          defaultToSourceGraphic: true,
+        );
+        final mapSource = _resolveDisplacementBuiltInInput(
+          primitive.input2,
+          defaultToSourceGraphic: false,
+        );
+        if (textureSource != null &&
+            mapSource != null &&
+            textureSource != _DisplacementInputSource.href &&
+            mapSource != _DisplacementInputSource.href) {
+          final requestKey =
+              '$filterId|${textureSource.name}|${mapSource.name}|${sourceInstance.key}';
+          if (seenRequestKeys.add(requestKey)) {
+            requests.add(
+              _DisplacementImageRequest.sourceBased(
+                filterId: filterId,
+                sourceInstance: sourceInstance,
+                textureSource: textureSource,
+                mapSource: mapSource,
+                displacementFilter: primitive,
+              ),
+            );
+          }
+        }
+      }
+
+      final targetWidth = _parsePositivePixelLength(
+        node.getAttributeValue('width')?.toString(),
+      );
+      final targetHeight = _parsePositivePixelLength(
+        node.getAttributeValue('height')?.toString(),
+      );
+      if (targetWidth != null && targetHeight != null) {
+        final passes = filters.resolvePaintPasses(filterId);
+        if (passes.length == 1 &&
+            passes.single is SvgDisplacementMapPaintPass) {
+          final pass = passes.single as SvgDisplacementMapPaintPass;
+          final textureHref = pass.textureHref?.trim();
+          final mapHref = pass.mapHref?.trim();
+          if (textureHref != null &&
+              textureHref.isNotEmpty &&
+              mapHref != null &&
+              mapHref.isNotEmpty) {
             final requestKey =
-                '$filterId|$textureSource.name|${mapSource.name}|${node.nodeKey}';
+                '$filterId|${targetWidth}x$targetHeight|$textureHref|$mapHref';
             if (seenRequestKeys.add(requestKey)) {
               requests.add(
-                _DisplacementImageRequest.sourceBased(
+                _DisplacementImageRequest.hrefBased(
                   filterId: filterId,
-                  sourceNode: node,
-                  textureSource: textureSource,
-                  mapSource: mapSource,
-                  displacementFilter: primitive,
+                  targetWidth: targetWidth,
+                  targetHeight: targetHeight,
+                  textureHref: textureHref,
+                  mapHref: mapHref,
+                  displacementFilter: pass.displacementFilter,
                 ),
               );
             }
           }
         }
-
-        final targetWidth = _parsePositivePixelLength(
-          node.getAttributeValue('width')?.toString(),
-        );
-        final targetHeight = _parsePositivePixelLength(
-          node.getAttributeValue('height')?.toString(),
-        );
-        if (targetWidth != null && targetHeight != null) {
-          final passes = filters.resolvePaintPasses(filterId);
-          if (passes.length == 1 &&
-              passes.single is SvgDisplacementMapPaintPass) {
-            final pass = passes.single as SvgDisplacementMapPaintPass;
-            final textureHref = pass.textureHref?.trim();
-            final mapHref = pass.mapHref?.trim();
-            if (textureHref != null &&
-                textureHref.isNotEmpty &&
-                mapHref != null &&
-                mapHref.isNotEmpty) {
-              final requestKey =
-                  '$filterId|${targetWidth}x$targetHeight|$textureHref|$mapHref';
-              if (seenRequestKeys.add(requestKey)) {
-                requests.add(
-                  _DisplacementImageRequest.hrefBased(
-                    filterId: filterId,
-                    targetWidth: targetWidth,
-                    targetHeight: targetHeight,
-                    textureHref: textureHref,
-                    mapHref: mapHref,
-                    displacementFilter: pass.displacementFilter,
-                  ),
-                );
-              }
-            }
-          }
-        }
-      }
-
-      for (final child in node.children) {
-        visit(child);
       }
     }
-
-    visit(_document.root);
     return requests;
   }
 
@@ -719,10 +765,11 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     }
 
     for (final request in requests) {
-      final sourceNode = request.sourceNode;
-      if (sourceNode == null) {
+      final sourceInstance = request.sourceInstance;
+      if (sourceInstance == null) {
         continue;
       }
+      final sourceNode = sourceInstance.node;
       final rawNodeTransform = sourceNode
           .getAttributeValue('transform')
           ?.toString();
@@ -742,10 +789,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
                   Duration.microsecondsPerSecond,
         hasAnimations: _hasAnimations,
       );
-      final nodeBounds = _measureNodeBoundsInDocumentSpace(
-        boundsPainter,
-        sourceNode,
-      );
+      final nodeBounds = boundsPainter.measureFilterTargetBounds(sourceNode);
       if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
         continue;
       }
@@ -766,6 +810,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
         captureWidth,
         captureHeight,
         captureRect: captureRect,
+        useChain: sourceInstance.useChain,
       );
       if (sourceImage == null) {
         continue;
@@ -832,7 +877,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
       }
 
       final key =
-          '${request.filterId}|${outputImage.width}x${outputImage.height}|${request.kindName}|${sourceNode.nodeKey}';
+          '${request.filterId}|${outputImage.width}x${outputImage.height}|${request.kindName}|${sourceInstance.key}';
       final previous = _lightingImagesByFilterKey[key];
       if (!identical(previous, outputImage)) {
         previous?.dispose();
@@ -881,10 +926,11 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
           continue;
         }
       } else {
-        final sourceNode = request.sourceNode;
-        if (sourceNode == null) {
+        final sourceInstance = request.sourceInstance;
+        if (sourceInstance == null) {
           continue;
         }
+        final sourceNode = sourceInstance.node;
 
         final boundsPainter = AnimatedSvgPainter(
           document: _document,
@@ -899,10 +945,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
                     Duration.microsecondsPerSecond,
           hasAnimations: _hasAnimations,
         );
-        final nodeBounds = _measureNodeBoundsInDocumentSpace(
-          boundsPainter,
-          sourceNode,
-        );
+        final nodeBounds = boundsPainter.measureFilterTargetBounds(sourceNode);
         if (nodeBounds.width <= 0 || nodeBounds.height <= 0) {
           continue;
         }
@@ -922,6 +965,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
           captureWidth,
           captureHeight,
           captureRect: captureRect,
+          useChain: sourceInstance.useChain,
         );
         if (sourceImage == null) {
           continue;
@@ -1018,7 +1062,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
 
       final key = request.isHrefBased
           ? '${request.filterId}|${displacedImage.width}x${displacedImage.height}'
-          : '${request.filterId}|${displacedImage.width}x${displacedImage.height}|${request.sourceNode!.nodeKey}';
+          : '${request.filterId}|${displacedImage.width}x${displacedImage.height}|${request.sourceInstance!.key}';
       final previous = _displacementImagesByFilterKey[key];
       if (!identical(previous, displacedImage)) {
         previous?.dispose();
@@ -1072,6 +1116,7 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     int targetWidth,
     int targetHeight, {
     ui.Rect? captureRect,
+    List<SvgNode> useChain = const <SvgNode>[],
   }) async {
     if (targetWidth <= 0 || targetHeight <= 0) {
       return null;
@@ -1101,7 +1146,13 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     final canvas = ui.Canvas(recorder);
 
     canvas.translate(-effectiveCaptureRect.left, -effectiveCaptureRect.top);
-    painter.paintNodeForRaster(canvas, node, ignoreFilter: true);
+    painter.paintNodeForRaster(
+      canvas,
+      node,
+      ignoreFilter: true,
+      useChain: useChain,
+      applyUseTransforms: false,
+    );
 
     final picture = recorder.endRecording();
     try {
@@ -1113,135 +1164,6 @@ extension _AnimatedSvgPictureStateImagesExtension on _AnimatedSvgPictureState {
     }
   }
 
-  ui.Rect _measureNodeBoundsInDocumentSpace(
-    AnimatedSvgPainter painter,
-    SvgNode node,
-  ) {
-    final localBounds = painter.measureFilterTargetBounds(node);
-    if (localBounds.width <= 0 || localBounds.height <= 0) {
-      return localBounds;
-    }
-
-    final matrix = _identityAffineMatrix();
-    _appendNodeTransformToAffine(matrix, node);
-
-    return _transformRectWithAffine(localBounds, matrix);
-  }
-
-  List<double> _identityAffineMatrix() => <double>[1, 0, 0, 1, 0, 0];
-
-  void _appendNodeTransformToAffine(List<double> matrix, SvgNode node) {
-    final raw = node.getAttributeValue('transform')?.toString();
-    if (raw == null || raw.trim().isEmpty) {
-      return;
-    }
-
-    final transforms = SvgTransform.parse(raw);
-    for (final transform in transforms) {
-      switch (transform.type) {
-        case SvgTransformType.translate:
-          final tx = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          final ty = transform.values.length > 1 ? transform.values[1] : 0.0;
-          _multiplyAffine(matrix, <double>[1, 0, 0, 1, tx, ty]);
-          break;
-        case SvgTransformType.scale:
-          final sx = transform.values.isNotEmpty ? transform.values[0] : 1.0;
-          final sy = transform.values.length > 1 ? transform.values[1] : sx;
-          _multiplyAffine(matrix, <double>[sx, 0, 0, sy, 0, 0]);
-          break;
-        case SvgTransformType.rotate:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          final radians = angle * math.pi / 180.0;
-          final cosA = math.cos(radians);
-          final sinA = math.sin(radians);
-          if (transform.values.length >= 3) {
-            final cx = transform.values[1];
-            final cy = transform.values[2];
-            _multiplyAffine(matrix, <double>[1, 0, 0, 1, cx, cy]);
-            _multiplyAffine(matrix, <double>[cosA, sinA, -sinA, cosA, 0, 0]);
-            _multiplyAffine(matrix, <double>[1, 0, 0, 1, -cx, -cy]);
-          } else {
-            _multiplyAffine(matrix, <double>[cosA, sinA, -sinA, cosA, 0, 0]);
-          }
-          break;
-        case SvgTransformType.skewX:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          _multiplyAffine(matrix, <double>[
-            1,
-            0,
-            math.tan(angle * math.pi / 180.0),
-            1,
-            0,
-            0,
-          ]);
-          break;
-        case SvgTransformType.skewY:
-          final angle = transform.values.isNotEmpty ? transform.values[0] : 0.0;
-          _multiplyAffine(matrix, <double>[
-            1,
-            math.tan(angle * math.pi / 180.0),
-            0,
-            1,
-            0,
-            0,
-          ]);
-          break;
-        case SvgTransformType.matrix:
-          if (transform.values.length >= 6) {
-            _multiplyAffine(matrix, <double>[
-              transform.values[0],
-              transform.values[1],
-              transform.values[2],
-              transform.values[3],
-              transform.values[4],
-              transform.values[5],
-            ]);
-          }
-          break;
-        default:
-          break;
-      }
-    }
-  }
-
-  void _multiplyAffine(List<double> current, List<double> next) {
-    final a = current[0] * next[0] + current[2] * next[1];
-    final b = current[1] * next[0] + current[3] * next[1];
-    final c = current[0] * next[2] + current[2] * next[3];
-    final d = current[1] * next[2] + current[3] * next[3];
-    final e = current[0] * next[4] + current[2] * next[5] + current[4];
-    final f = current[1] * next[4] + current[3] * next[5] + current[5];
-    current[0] = a;
-    current[1] = b;
-    current[2] = c;
-    current[3] = d;
-    current[4] = e;
-    current[5] = f;
-  }
-
-  ui.Rect _transformRectWithAffine(ui.Rect rect, List<double> matrix) {
-    final p1 = _transformPointWithAffine(rect.left, rect.top, matrix);
-    final p2 = _transformPointWithAffine(rect.right, rect.top, matrix);
-    final p3 = _transformPointWithAffine(rect.left, rect.bottom, matrix);
-    final p4 = _transformPointWithAffine(rect.right, rect.bottom, matrix);
-
-    final minX = math.min(math.min(p1.dx, p2.dx), math.min(p3.dx, p4.dx));
-    final maxX = math.max(math.max(p1.dx, p2.dx), math.max(p3.dx, p4.dx));
-    final minY = math.min(math.min(p1.dy, p2.dy), math.min(p3.dy, p4.dy));
-    final maxY = math.max(math.max(p1.dy, p2.dy), math.max(p3.dy, p4.dy));
-
-    return ui.Rect.fromLTRB(minX, minY, maxX, maxY);
-  }
-
-  ui.Offset _transformPointWithAffine(double x, double y, List<double> matrix) {
-    return ui.Offset(
-      matrix[0] * x + matrix[2] * y + matrix[4],
-      matrix[1] * x + matrix[3] * y + matrix[5],
-    );
-  }
-
-  /// Checks if an href refers to an SVG file.
-  /// Returns true for .svg file extension or image/svg+xml MIME type in data URIs.
   bool _isSvgImageHref(String href) {
     // Check file extension
     final lowerHref = href.toLowerCase();
@@ -1563,6 +1485,18 @@ class _ConvolveImageRequest {
   final int? targetHeight;
 }
 
+class _SourceFilterRenderInstance {
+  _SourceFilterRenderInstance({
+    required this.node,
+    List<SvgNode> useChain = const <SvgNode>[],
+  }) : useChain = List<SvgNode>.unmodifiable(useChain),
+       key = AnimatedSvgPainter.sourceFilterTargetInstanceKey(node, useChain);
+
+  final SvgNode node;
+  final List<SvgNode> useChain;
+  final String key;
+}
+
 enum _LightingVariantKind { diffuse, specular }
 
 class _LightingImageRequest {
@@ -1573,7 +1507,7 @@ class _LightingImageRequest {
     this.targetHeight,
   }) : kind = _LightingVariantKind.diffuse,
        specularPass = null,
-       sourceNode = null;
+       sourceInstance = null;
 
   const _LightingImageRequest.specular({
     required this.filterId,
@@ -1582,11 +1516,11 @@ class _LightingImageRequest {
     this.targetHeight,
   }) : kind = _LightingVariantKind.specular,
        diffusePass = null,
-       sourceNode = null;
+       sourceInstance = null;
 
   const _LightingImageRequest.sourceDiffuse({
     required this.filterId,
-    required this.sourceNode,
+    required this.sourceInstance,
     required this.diffusePass,
   }) : kind = _LightingVariantKind.diffuse,
        specularPass = null,
@@ -1595,7 +1529,7 @@ class _LightingImageRequest {
 
   const _LightingImageRequest.sourceSpecular({
     required this.filterId,
-    required this.sourceNode,
+    required this.sourceInstance,
     required this.specularPass,
   }) : kind = _LightingVariantKind.specular,
        diffusePass = null,
@@ -1608,7 +1542,7 @@ class _LightingImageRequest {
   final SvgSpecularLightingPaintPass? specularPass;
   final int? targetWidth;
   final int? targetHeight;
-  final SvgNode? sourceNode;
+  final _SourceFilterRenderInstance? sourceInstance;
 
   String get kindName =>
       kind == _LightingVariantKind.diffuse ? 'diffuse' : 'specular';
@@ -1659,13 +1593,13 @@ class _DisplacementImageRequest {
     required this.textureHref,
     required this.mapHref,
     required this.displacementFilter,
-  }) : sourceNode = null,
+  }) : sourceInstance = null,
        textureSource = _DisplacementInputSource.href,
        mapSource = _DisplacementInputSource.href;
 
   const _DisplacementImageRequest.sourceBased({
     required this.filterId,
-    required this.sourceNode,
+    required this.sourceInstance,
     required this.textureSource,
     required this.mapSource,
     required this.displacementFilter,
@@ -1679,7 +1613,7 @@ class _DisplacementImageRequest {
   final int? targetHeight;
   final String? textureHref;
   final String? mapHref;
-  final SvgNode? sourceNode;
+  final _SourceFilterRenderInstance? sourceInstance;
   final _DisplacementInputSource textureSource;
   final _DisplacementInputSource mapSource;
   final SvgDisplacementMapFilter displacementFilter;
