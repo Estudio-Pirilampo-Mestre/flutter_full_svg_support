@@ -1,3 +1,25 @@
+## 1.4.2
+
+### Correct SourceGraphic filters for repeated use instances
+
+**Fixed**
+
+- Source-based diffuse lighting, specular lighting, and displacement filters
+  now keep separate precomputed rasters for each rendered `<use>` instance, so
+  inherited properties such as `fill` no longer leak between instances of the
+  same definition.
+- SourceGraphic precomputation now stays in the filter target's local
+  coordinate space. Scaled, rotated, nested, and x/y-positioned `<use>` chains
+  therefore use the same cache dimensions as paint-time filter lookup instead
+  of silently falling back to the unfiltered graphic.
+
+**Maintenance**
+
+- Centralized the supported `<use>` target whitelist and recursion-depth limit
+  across painting, hit testing, and asynchronous filter precomputation.
+- Added pixel regressions for flat and nested use inheritance, transformed use
+  chains, lighting, displacement, and distinct id-less filter targets.
+
 ## 1.4.1
 
 ### Android 16 KB page-size compatibility
